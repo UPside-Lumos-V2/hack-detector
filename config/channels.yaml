@@ -1,0 +1,23 @@
+# 모니터링 대상 텔레그램 채널 목록
+# tier: 1 = 보안업체 공식, 2 = 개인 리서처, 3 = 커뮤니티
+
+channels:
+  # ── Tier 1: 보안업체 공식 ──
+  - username: "PeckShieldAlert"
+    tier: 1
+    description: "PeckShield 보안 알림"
+
+  - username: "CertiKAlert"
+    tier: 1
+    description: "CertiK 보안 알림"
+
+  - username: "BlockSecTeam"
+    tier: 1
+    description: "BlockSec 보안 알림"
+
+  # ── Tier 2: 개인 리서처 ──
+  # - username: "samczsun"
+  #   tier: 2
+  #   description: "samczsun 개인 채널"
+
+  # ── 추가 채널은 여기에 ──

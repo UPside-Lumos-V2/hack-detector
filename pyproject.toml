@@ -1,0 +1,15 @@
+[project]
+name = "hack-detector"
+version = "0.1.0"
+description = "DeFi hack incident auto-detection pipeline"
+requires-python = ">=3.12"
+dependencies = [
+    "telethon>=1.37",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.7",
+]
