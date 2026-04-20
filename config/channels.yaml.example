@@ -1,0 +1,8 @@
+# 모니터링 대상 텔레그램 채널 목록 (예시)
+# 실제 채널 ID로 channels.yaml을 만들어 사용하세요.
+# channels.yaml은 gitignore 되어 있습니다.
+
+channels:
+  - chat_id: -100XXXXXXXXXX
+    name: "Channel Name"
+    tier: 1
