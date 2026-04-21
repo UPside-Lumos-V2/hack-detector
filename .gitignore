@@ -29,7 +29,21 @@ Thumbs.db
 channels.yaml
 config/channels.yaml
 config/protocols.yaml
+config/accounts.yaml
 
 # Logs
 logs/
 *.log
+
+# twscrape 세션 DB (레거시 — 더 이상 사용 안 함)
+accounts.db
+accounts.db-journal
+
+# Twitter 쿠키 (auth_token 포함 — 절대 커밋 금지)
+cookies.json
+
+# Twitter 폴링 캐시 (로컬 상태)
+last_ids.json
+
+# xAI 예산 추적 (로컬 상태)
+xai_budget.json

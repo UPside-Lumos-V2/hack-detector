@@ -86,3 +86,31 @@ class HackSignal:
             published_at=message.date,
             media_urls=media_urls,
         )
+
+    @classmethod
+    def from_tweet(cls, tweet, tier: int = 2) -> "HackSignal":
+        """
+        twscrape Tweet 객체 → HackSignal 변환.
+
+        tweet attrs: .id, .rawContent, .user.username, .date
+        텍스트 내용 분석(protocol, tx_hash 등)은 여기서 하지 않음
+        — field_extractor가 채움.
+        """
+        from src.extractors.field_extractor import extract_all
+
+        fields = extract_all(tweet.rawContent)
+        return cls(
+            raw_text=tweet.rawContent,
+            source=SourceType.TWITTER,
+            source_id=f"tw:{tweet.id}",
+            source_url=f"https://x.com/{tweet.user.username}/status/{tweet.id}",
+            source_author=tweet.user.username,
+            source_author_tier=tier,
+            published_at=tweet.date,
+            protocol_name=fields["protocol_name"],
+            chain=fields["chain"],
+            loss_usd=fields["loss_usd"],
+            tx_hash=fields["tx_hash"],
+            attacker_address=fields["attacker_address"],
+        )
+

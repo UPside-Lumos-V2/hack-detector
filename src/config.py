@@ -80,3 +80,49 @@ def get_supabase_client():
             "SUPABASE_URL, SUPABASE_SERVICE_KEY 필요 (.env 확인)"
         )
     return create_client(url, key)
+
+
+def load_twitter_accounts() -> dict[str, list[dict]] | None:
+    """
+    config/accounts.yaml에서 Twitter 모니터링 대상 계정 로딩.
+    없으면 None 반환 (Twitter 폴링 비활성).
+    """
+    accounts_file = CONFIG_DIR / "accounts.yaml"
+    if not accounts_file.exists():
+        print("⚠️ config/accounts.yaml 없음 — Twitter 폴링 비활성")
+        return None
+
+    with open(accounts_file, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+
+    accounts = data.get("twitter_accounts")
+    if not accounts:
+        return None
+
+    return accounts
+
+
+def get_twitter_poll_interval() -> int:
+    """accounts.yaml에서 폴링 간격 로딩 (기본 300초)"""
+    accounts_file = CONFIG_DIR / "accounts.yaml"
+    if not accounts_file.exists():
+        return 300
+
+    with open(accounts_file, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+
+    return data.get("poll_interval_seconds", 300)
+
+
+def get_xai_client():
+    """
+    xAI Grok API 클라이언트 (OpenAI 호환) — 폴백용.
+    XAI_API_KEY가 없으면 RuntimeError 발생 → 폴백 비활성.
+    """
+    from openai import OpenAI
+
+    api_key = os.getenv("XAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("XAI_API_KEY 미설정 — xAI 폴백 비활성")
+    return OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+
