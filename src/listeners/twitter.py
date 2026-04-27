@@ -286,8 +286,23 @@ class TwitterPoller:
                     continue
 
                 fields = extract_all(tw.text)
+                # 참조 트윗 URL resolve → raw_text에 append
+                from src.extractors.tweet_resolver import (
+                    resolve_tweet_urls,
+                    append_resolved_to_text,
+                )
+                try:
+                    resolved = await resolve_tweet_urls(tw.text)
+                    enriched_text = append_resolved_to_text(tw.text, resolved)
+                except Exception:
+                    enriched_text = tw.text
+
+                # resolve 후 재추출 (참조 트윗에서 추가 메타데이터)
+                if enriched_text != tw.text:
+                    fields = extract_all(enriched_text)
+
                 signal = HackSignal(
-                    raw_text=tw.text,
+                    raw_text=enriched_text,
                     source=SourceType.TWITTER,
                     source_id=f"tw:{tw.id}",
                     source_url=f"https://x.com/{tw.username}/status/{tw.id}",

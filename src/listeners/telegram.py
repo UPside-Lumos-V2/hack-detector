@@ -71,8 +71,8 @@ async def start_listening(client: TelegramClient, channels: list[ChannelConfig])
             if not ch:
                 return
 
-            # Normalizer: 필터링 → 필드 추출 → HackSignal
-            signal = process_message(message, ch, store=store)
+            # Normalizer: 필터링 → URL resolve → 정규식 → LLM → HackSignal
+            signal = await process_message(message, ch, store=store)
             if signal is None:
                 return  # skip (skipped.log + Supabase에 기록됨)
 

@@ -1,6 +1,6 @@
 [project]
 name = "hack-detector"
-version = "0.4.4"
+version = "0.5.0"
 description = "DeFi hack incident auto-detection pipeline"
 requires-python = ">=3.12"
 dependencies = [
@@ -10,6 +10,7 @@ dependencies = [
     "supabase>=2.0",
     "httpx>=0.27",
     "openai>=1.0",
+    "google-genai>=1.0",
 ]
 
 [project.optional-dependencies]

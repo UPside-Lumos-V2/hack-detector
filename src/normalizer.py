@@ -1,8 +1,9 @@
 """
-Normalizer — 메시지 관련성 판단 + Field Extractor 적용.
+Normalizer — 메시지 관련성 판단 + Field Extractor 적용 + LLM 보강.
 
+파이프라인: should_skip() → tweet URL resolve → regex 추출 → LLM 분류 → merge
 - should_skip(): 명백한 비관련 메시지만 제거 (보수적)
-- process_message(): 필터링 → 필드 추출 → HackSignal 반환
+- process_message(): 필터링 → URL resolve → 정규식 → LLM → HackSignal 반환
 - skip된 메시지는 logs/skipped.log에 누적 (유저 피드백용)
 """
 import re
@@ -12,6 +13,8 @@ from pathlib import Path
 from src.models import HackSignal
 from src.config import ChannelConfig
 from src.extractors.field_extractor import extract_all
+from src.extractors.tweet_resolver import resolve_tweet_urls, append_resolved_to_text
+from src.classifiers.gemini_classifier import GeminiClassifier, merge_results
 
 # ── Skip 로거 설정 (파일 누적) ──
 _LOG_DIR = Path(__file__).parent.parent / "logs"
@@ -43,6 +46,17 @@ HACK_KEYWORDS = [
     "front-run", "frontrun", "sandwich",
     "oracle manipulation", "price manipulation",
 ]
+
+# ── Gemini 분류기 (싱글톤) ──
+_classifier: GeminiClassifier | None = None
+
+
+def _get_classifier() -> GeminiClassifier:
+    """GeminiClassifier 싱글톤."""
+    global _classifier
+    if _classifier is None:
+        _classifier = GeminiClassifier()
+    return _classifier
 
 
 def has_hack_keyword(text: str) -> bool:
@@ -82,13 +96,20 @@ def should_skip(text: str) -> tuple[bool, str]:
     return False, ""
 
 
-def process_message(
+async def process_message(
     message,
     channel: ChannelConfig,
     store=None,
 ) -> HackSignal | None:
     """
-    메시지 → 필터링 → 필드 추출 → HackSignal 반환.
+    메시지 → 필터링 → URL resolve → 정규식 → LLM → HackSignal 반환.
+
+    파이프라인:
+    1. should_skip: 명백한 비관련 제거
+    2. tweet URL resolve: fxtwitter로 참조 트윗 내용 가져와서 raw_text에 append
+    3. extract_all (regex): 빠르고 무료 — 기본 메타데이터 추출
+    4. GeminiClassifier: LLM으로 is_hack 판정 + 놓친 필드 보강
+    5. merge: regex 결과 + LLM 결과 합치기
 
     skip된 경우 None 반환 + skipped.log + Supabase 기록.
     store가 주어지면 lumos_skipped_messages에도 저장.
@@ -113,20 +134,43 @@ def process_message(
             )
         return None
 
-    # 2. HackSignal 생성 (메타데이터 수집)
+    # 2. Tweet URL resolve — 참조 트윗 내용을 raw_text에 append
+    try:
+        resolved = await resolve_tweet_urls(text)
+        text = append_resolved_to_text(text, resolved)
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Tweet resolve failed: {e}")
+
+    # 3. HackSignal 생성 (기본 메타데이터)
     signal = HackSignal.from_telegram(
         message=message,
         channel_name=channel.name,
         channel_tier=channel.tier,
         chat_id=channel.chat_id,
     )
+    # resolve된 텍스트로 raw_text 업데이트
+    signal.raw_text = text
 
-    # 3. Field Extractor로 optional 필드 채우기
-    extracted = extract_all(signal.raw_text)
-    signal.protocol_name = extracted["protocol_name"]
-    signal.chain = extracted["chain"]
-    signal.loss_usd = extracted["loss_usd"]
-    signal.tx_hash = extracted["tx_hash"]
-    signal.attacker_address = extracted["attacker_address"]
+    # 4. 정규식 추출 (1차 — 빠르고 무료)
+    regex_fields = extract_all(text)
+
+    # 5. LLM 분류 (2차 — 보강)
+    classifier = _get_classifier()
+    llm_result = None
+    if classifier.available:
+        try:
+            llm_result = await classifier.classify(text)
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"LLM classify failed: {e}")
+
+    # 6. Merge: regex + LLM
+    merged = merge_results(regex_fields, llm_result)
+
+    # 결과 적용
+    signal.protocol_name = merged.get("protocol_name")
+    signal.chain = merged.get("chain")
+    signal.loss_usd = merged.get("loss_usd")
+    signal.tx_hash = merged.get("tx_hash")
+    signal.attacker_address = merged.get("attacker_address")
 
     return signal

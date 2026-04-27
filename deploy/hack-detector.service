@@ -5,8 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=h970513_gmail_com
 WorkingDirectory=/opt/hack-detector
-EnvironmentFile=/etc/hack-detector/hack-detector.env
+EnvironmentFile=/opt/hack-detector/.env
 ExecStart=/opt/hack-detector/.venv/bin/python -m src.main listen
 Restart=always
 RestartSec=10
@@ -15,7 +16,6 @@ StandardError=journal
 
 # e2-micro 리소스 보호
 MemoryMax=512M
-CPUQuota=50%
 
 [Install]
 WantedBy=multi-user.target
