@@ -64,38 +64,40 @@ async def start_listening(client: TelegramClient, channels: list[ChannelConfig])
 
     @client.on(events.NewMessage(chats=chat_ids))
     async def on_new_message(event):
-        message = event.message
-        chat_id = event.chat_id
-        ch = channel_map.get(chat_id)
-        if not ch:
-            return
+        try:
+            message = event.message
+            chat_id = event.chat_id
+            ch = channel_map.get(chat_id)
+            if not ch:
+                return
 
-        # Normalizer: 필터링 → 필드 추출 → HackSignal
-        signal = process_message(message, ch, store=store)
-        if signal is None:
-            return  # skip (skipped.log + Supabase에 기록됨)
+            # Normalizer: 필터링 → 필드 추출 → HackSignal
+            signal = process_message(message, ch, store=store)
+            if signal is None:
+                return  # skip (skipped.log + Supabase에 기록됨)
 
-        # Supabase에 저장
-        inserted = store.insert(signal)
-        if not inserted:
-            return  # 중복 — 이미 저장됨
+            # Supabase에 저장
+            inserted = store.insert(signal)
+            if not inserted:
+                return  # 중복 — 이미 저장됨
 
-        # 감지 출력
-        print(f"\n🔔 [{signal.source_author}] (Tier {signal.source_author_tier})")
-        print(f"   📝 {signal.raw_text[:200]}")
-        if signal.protocol_name:
-            print(f"   🏷️  Protocol: {signal.protocol_name}")
-        if signal.chain:
-            print(f"   ⛓️  Chain: {signal.chain}")
-        if signal.loss_usd:
-            print(f"   💰 Loss: ${signal.loss_usd:,.0f}")
-        if signal.tx_hash:
-            print(f"   🔗 Tx: {signal.tx_hash[:20]}...")
-        if signal.attacker_address:
-            print(f"   👤 Attacker: {signal.attacker_address}")
-        print(f"   📅 {signal.published_at}")
-        print(f"   🆔 {signal.id}")
-        print(f"   💾 Supabase 저장 (총 {store.count()}건)")
+            # 감지 출력
+            print(f"\n[{signal.source_author}] (Tier {signal.source_author_tier})")
+            print(f"   {signal.raw_text[:200]}")
+            if signal.protocol_name:
+                print(f"   Protocol: {signal.protocol_name}")
+            if signal.chain:
+                print(f"   Chain: {signal.chain}")
+            if signal.loss_usd:
+                print(f"   Loss: ${signal.loss_usd:,.0f}")
+            if signal.tx_hash:
+                print(f"   Tx: {signal.tx_hash[:20]}...")
+            if signal.attacker_address:
+                print(f"   Attacker: {signal.attacker_address}")
+            print(f"   {signal.published_at}")
+            print(f"   Stored (total {store.count()})")
+        except Exception as e:
+            print(f"  Message handler error (chat={event.chat_id}): {e}")
 
     print(f"\n👂 {len(channels)}개 채널 실시간 리스닝 시작...")
     for ch in channels:

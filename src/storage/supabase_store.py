@@ -1,5 +1,6 @@
 """Supabase 기반 HackSignal 저장소"""
 import json
+import time
 
 from supabase import Client
 
@@ -8,6 +9,12 @@ from src.config import get_supabase_client
 from src.normalizer import has_hack_keyword
 from src.grouper import IncidentGrouper
 from src.scorer import calculate_confidence
+from src.alerter import AlertRuleEngine
+from src.deduplicator import AlertDeduplicator
+from src.formatter import AlertFormatter
+from src.logger import StructuredLogger
+
+logger = StructuredLogger("store")
 
 
 class SignalStore:
@@ -16,6 +23,9 @@ class SignalStore:
     def __init__(self):
         self.client: Client = get_supabase_client()
         self.grouper = IncidentGrouper(self.client)
+        self.alert_engine = AlertRuleEngine()
+        self.deduplicator = AlertDeduplicator(self.client)
+        self.formatter = AlertFormatter()
 
     def insert(self, signal: HackSignal) -> bool:
         """
@@ -25,6 +35,8 @@ class SignalStore:
         # 1. Incident 그룹 매칭/생성
         group_id = None
         confidence = 0
+        group_data = None
+        grp = None  # 최종 그룹 상태 (confidence 반영 후)
         try:
             group_id = self.grouper.match_or_create(signal)
             if group_id:
@@ -42,11 +54,35 @@ class SignalStore:
                     self.client.table("lumos_incident_groups").update(
                         {"confidence_score": confidence}
                     ).eq("id", group_id).execute()
+                    # Critical 2: 업데이트된 confidence를 반영한 최종 그룹 상태
+                    grp = {**group_data.data[0], "confidence_score": confidence}
         except Exception as e:
             # 그룹핑 실패해도 신호 저장은 계속
-            print(f"  ⚠️ 그룹핑 실패 (저장은 계속): {e}")
+            logger.error("grouper", "match_or_create", str(e), recoverable=True)
 
-        # 2. 신호 저장
+        # 2. Alert 판정 (signal 저장 후 실행하기 위해 결과만 미리 계산)
+        alert_status = "pending"
+        alert_decision_data = None  # (action, grp, new_fields) 저장용
+        if group_id and grp:
+            try:
+                decision = self.alert_engine.evaluate(grp)
+                if decision.should_alert:
+                    dedup_result = self.deduplicator.check(group_id, grp)
+                    if dedup_result.action == "first_alert":
+                        alert_status = "alerted"
+                        alert_decision_data = ("first_alert", grp, [])
+                    elif dedup_result.action == "follow_up":
+                        alert_status = "follow_up"
+                        # Critical 4: deduplicator가 반환한 실제 새 필드만 사용
+                        alert_decision_data = ("follow_up", grp, dedup_result.new_fields)
+                    else:
+                        alert_status = "silent"
+                else:
+                    alert_status = "silent"
+            except Exception as e:
+                logger.error("alerter", "evaluate", str(e), recoverable=True)
+
+        # 3. 신호 저장
         data = {
             "raw_text": signal.raw_text,
             "source": signal.source.value,
@@ -65,29 +101,34 @@ class SignalStore:
             "has_hack_keyword": has_hack_keyword(signal.raw_text),
             "incident_group_id": group_id,
             "confidence_score": confidence,
+            "alert_status": alert_status,
         }
 
         try:
-            self.client.table("lumos_hack_signals").insert(data).execute()
+            result = self.client.table("lumos_hack_signals").insert(data).execute()
+            # 저장된 signal의 DB id 추출
+            stored_signal_id = result.data[0]["id"] if result.data else None
 
-            # 그룹 정보 로깅
-            if group_id and confidence > 0:
-                group_info = (
-                    self.client.table("lumos_incident_groups")
-                    .select("signal_count, source_types")
-                    .eq("id", group_id)
-                    .limit(1)
-                    .execute()
-                )
-                if group_info.data:
-                    g = group_info.data[0]
-                    src_types = g.get("source_types", [])
-                    sig_count = g.get("signal_count", 1)
-                    cross = "🔥교차" if len(set(src_types)) >= 2 else ""
-                    print(
-                        f"   📊 Confidence: {confidence} "
-                        f"({sig_count}건 {'/'.join(src_types)}) {cross}"
-                    )
+            # 4. Alert 레코드 저장 (signal이 DB에 존재한 후)
+            if alert_decision_data and stored_signal_id:
+                action_type, alert_grp, new_fields = alert_decision_data
+                if action_type == "first_alert":
+                    alert_msg = self.formatter.format_first_alert(group_id, alert_grp)
+                    self._insert_alert(alert_msg, stored_signal_id)
+                    logger.alert_fired(group_id, "critical", "first_alert", alert_msg.title)
+                elif action_type == "follow_up":
+                    alert_msg = self.formatter.format_follow_up(group_id, alert_grp, new_fields)
+                    self._insert_alert(alert_msg, stored_signal_id)
+                    logger.alert_fired(group_id, "follow_up", "follow_up", alert_msg.title)
+
+            # 신호 저장 로그
+            logger.signal_stored(
+                source=signal.source.value,
+                author=signal.source_author,
+                protocol=signal.protocol_name,
+                alert_status=alert_status,
+                confidence=confidence,
+            )
 
             return True
         except Exception as e:
@@ -117,11 +158,34 @@ class SignalStore:
                 "raw_text": raw_text,
             }).execute()
         except Exception as e:
-            # skip 로깅 실패는 치명적이지 않음 — 파일 로그로 대체
-            print(f"  ⚠️ skip 로깅 실패: {e}")
+            # skip 로깅 실패는 치명적이지 않음
+            logger.error("store", "log_skip", str(e), recoverable=True)
 
     def count(self) -> int:
         """전체 hack_signals 수"""
         result = self.client.table("lumos_hack_signals") \
             .select("id", count="exact").execute()
         return result.count or 0
+
+    def _insert_alert(self, alert_msg, trigger_signal_id: str) -> None:
+        """lumos_hack_alerts에 알림 레코드 저장. 실패 시 1회 재시도."""
+        data = {
+            "incident_group_id": alert_msg.incident_group_id,
+            "alert_level": alert_msg.alert_level,
+            "alert_action": alert_msg.alert_action,
+            "title": alert_msg.title,
+            "body": alert_msg.body,
+            "source_count": alert_msg.source_count,
+            "metadata": alert_msg.metadata,
+            "trigger_signal_id": trigger_signal_id,
+        }
+        try:
+            self.client.table("lumos_hack_alerts").insert(data).execute()
+        except Exception as e:
+            # 1회 재시도
+            logger.error("store", "insert_alert", f"retry: {e}", recoverable=True)
+            try:
+                time.sleep(0.5)
+                self.client.table("lumos_hack_alerts").insert(data).execute()
+            except Exception as e2:
+                logger.error("store", "insert_alert", f"final fail: {e2}", recoverable=False)

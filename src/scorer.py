@@ -30,11 +30,9 @@ def calculate_confidence(group: dict) -> int:
     source_types = group.get("source_types") or []
     unique_sources = set(source_types)
 
-    # 기본 Tier 점수 (그룹 내 최고 Tier 추정)
-    # Tier 정보는 그룹에 직접 없으므로, signal_count 기반 추정
-    # 그룹 생성 시 첫 signal의 tier를 기록하면 더 정확하지만,
-    # 현재는 Tier 1 기본값 (보안업체 Alert 채널이 대부분)
-    score += TIER_SCORES.get(1, 10)
+    # 기본 Tier 점수 (그룹의 best_tier 사용)
+    best_tier = group.get("best_tier") or 3
+    score += TIER_SCORES.get(best_tier, 10)
 
     # 교차 소스 보너스 (+30)
     if len(unique_sources) >= 2:

@@ -275,6 +275,14 @@ class TwitterPoller:
             for tw in new_tweets:
                 skip, reason = should_skip(tw.text)
                 if skip:
+                    self.store.log_skip(
+                        reason=reason or "filtered",
+                        source="twitter",
+                        channel_name=handle,
+                        channel_id=0,
+                        message_id=tw.id,
+                        raw_text=tw.text[:500],
+                    )
                     continue
 
                 fields = extract_all(tw.text)
@@ -303,11 +311,11 @@ class TwitterPoller:
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 429:
-                print(f"  ⏳ 429 rate limit — 이번 사이클 중단")
-                return -1  # 특수값: 전체 사이클 중단 신호
+                print(f"  429 rate limit for {handle} -- backing off")
+                return -1  # caller handles backoff
             self.consecutive_failures += 1
             err_msg = str(e).split("for url")[0].strip()
-            print(f"  ⚠️ Twitter 실패 ({handle}): {err_msg}")
+            print(f"  Twitter error ({handle}): {err_msg}")
             if self.consecutive_failures >= 3:
                 self._activate_fallback()
             return 0
@@ -315,7 +323,7 @@ class TwitterPoller:
         except Exception as e:
             self.consecutive_failures += 1
             err_msg = str(e).split("for url")[0].strip()
-            print(f"  ⚠️ Twitter 실패 ({handle}): {err_msg}")
+            print(f"  Twitter error ({handle}): {err_msg}")
             if self.consecutive_failures >= 3:
                 self._activate_fallback()
             return 0
@@ -347,19 +355,19 @@ class TwitterPoller:
                     await asyncio.sleep(5)
                 if rate_limited:
                     break
-
-        return total
+        return -1 if rate_limited else total
 
     async def start(self, interval: int = 300):
-        """폴링 루프 — asyncio.create_task()로 실행"""
+        """polling loop with exponential backoff on 429"""
+        base_interval = interval
+        current_interval = interval
         n_accounts = sum(len(v) for v in self.accounts.values())
-        print(f"🐦 Twitter 폴링 시작 ({n_accounts}개 계정, {interval}초 간격)")
+        print(f"Twitter polling start ({n_accounts} accounts, {interval}s interval)")
         for tier_key, accs in self.accounts.items():
             for acc in accs:
-                print(f"   • @{acc['handle']} ({tier_key})")
+                print(f"   - @{acc['handle']} ({tier_key})")
 
-        # 첫 폴링에서 각 계정의 last_id가 자동 초기화됨 (lazy init)
-        print("  📌 첫 폴링에서 last_id가 자동 설정됩니다.")
+        print("  First poll will auto-set last_ids.")
 
         from datetime import datetime as _dt
 
@@ -367,13 +375,19 @@ class TwitterPoller:
             try:
                 now = _dt.now().strftime("%H:%M:%S")
                 count = await self.poll_all()
-                if count > 0:
-                    print(f"  🐦 [{now}] {count}개 새 트윗 → Supabase 저장")
+                if count == -1:
+                    # 429 rate limit: exponential backoff
+                    current_interval = min(current_interval * 2, 1800)
+                    print(f"  [{now}] 429 backoff: next poll in {current_interval}s")
+                elif count > 0:
+                    current_interval = base_interval
+                    print(f"  [{now}] {count} new tweets stored")
                 else:
-                    print(f"  💤 [{now}] 새 트윗 없음 — {interval}초 후 재폴링")
+                    current_interval = base_interval
+                    print(f"  [{now}] No new tweets -- next in {current_interval}s")
             except Exception as e:
-                print(f"  ⚠️ 폴링 루프 에러: {e}")
-            await asyncio.sleep(interval)
+                print(f"  Poll loop error: {e}")
+            await asyncio.sleep(current_interval)
 
 
     # ── xAI 폴백 ──

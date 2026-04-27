@@ -13,6 +13,62 @@ import yaml
 _PROTOCOLS_FILE = Path(__file__).parent.parent.parent / "config" / "protocols.yaml"
 _protocols_cache: list[dict] | None = None
 
+_TOKEN_BEFORE = r"(?<![a-zA-Z0-9])"
+_TOKEN_AFTER = r"(?![a-zA-Z0-9])"
+_EVM_ADDRESS_RE = r"0x[a-fA-F0-9]{40}"
+
+# 한 단어 alias 중 일반 문장에서도 자주 나오는 값은 단독 매칭하지 않는다.
+_AMBIGUOUS_PROTOCOL_ALIASES = {
+    "arb",
+    "base",
+    "curve",
+    "dai",
+    "level",
+    "maker",
+    "one",
+    "op",
+    "sentiment",
+    "sol",
+    "transit",
+    "uni",
+}
+
+_ATTACKER_LABEL_RE = re.compile(
+    rf"""
+    (?:
+        attacker(?:\s+address|\s+wallet)?|
+        exploiter(?:\s+address|\s+wallet)?|
+        hacker(?:\s+address|\s+wallet)?|
+        drainer(?:\s+address|\s+wallet)?|
+        malicious\s+(?:address|wallet)
+    )
+    [^\n\r]{{0,40}}?
+    ({_EVM_ADDRESS_RE})
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _contains_token(text_lower: str, keyword: str) -> bool:
+    """키워드를 토큰 경계 기준으로 매칭한다."""
+    keyword_lower = keyword.lower()
+    if keyword_lower.startswith(("#", "$")):
+        return keyword_lower in text_lower
+    pattern = _TOKEN_BEFORE + re.escape(keyword_lower) + _TOKEN_AFTER
+    return re.search(pattern, text_lower) is not None
+
+
+def _has_crypto_marker(text_lower: str, alias: str) -> bool:
+    """짧고 모호한 alias가 실제 토큰/프로토콜 문맥인지 확인한다."""
+    alias_lower = alias.lower()
+    marked = (f"#{alias_lower}" in text_lower) or (f"${alias_lower}" in text_lower)
+    contextual = re.search(
+        _TOKEN_BEFORE + re.escape(alias_lower) + _TOKEN_AFTER
+        + r".{0,24}\b(protocol|finance|network|dao|bridge|chain)\b",
+        text_lower,
+    )
+    return marked or contextual is not None
+
 
 def _load_protocols() -> list[dict]:
     """protocols.yaml에서 프로토콜 사전 로딩 (1회 캐싱)"""
@@ -54,28 +110,26 @@ def extract_tx_hash(text: str) -> str | None:
 
 def extract_addresses(text: str) -> list[str]:
     """이더리움 주소 추출 (0x + 40자 hex), tx_hash와 구분"""
-    all_hex = re.findall(r"0x[a-fA-F0-9]+", text)
-    addresses = []
-    for h in all_hex:
-        clean = h[:42]  # 0x + 40자만
-        if len(clean) == 42 and len(h) != 66:  # 66자(tx_hash) 제외
-            addresses.append(clean)
-    return addresses
+    matches = re.findall(rf"{_EVM_ADDRESS_RE}(?![a-fA-F0-9])", text)
+    return list(dict.fromkeys(matches))
 
 
 def extract_attacker_address(text: str) -> str | None:
-    """공격자 주소 추출 — 첫 번째 매칭 주소 반환"""
-    addrs = extract_addresses(text)
-    return addrs[0] if addrs else None
+    """공격자 주소 추출 — attacker/exploiter 등 명시 라벨이 있을 때만 반환"""
+    match = _ATTACKER_LABEL_RE.search(text)
+    return match.group(1) if match else None
 
 
 def extract_loss_usd(text: str) -> float | None:
     """피해액(USD) 추출"""
     patterns = [
-        (r"\$\s*([\d,.]+)\s*[Bb](?:illion)?", 1_000_000_000),
-        (r"\$\s*([\d,.]+)\s*[Mm](?:illion)?", 1_000_000),
-        (r"\$\s*([\d,.]+)\s*[Kk]", 1_000),
-        (r"\$\s*([\d,.]+)", 1),
+        (r"\$\s*~?\s*([\d,.]+)\s*[Bb](?:illion)?", 1_000_000_000),
+        (r"\$\s*~?\s*([\d,.]+)\s*[Mm](?:illion)?", 1_000_000),
+        (r"\$\s*~?\s*([\d,.]+)\s*[Kk]", 1_000),
+        (r"\$\s*~?\s*([\d,.]+)", 1),
+        (r"([\d,.]+)\s*[Bb](?:illion)?\s*(?:USD|USDT|USDC)", 1_000_000_000),
+        (r"([\d,.]+)\s*[Mm](?:illion)?\s*(?:USD|USDT|USDC)", 1_000_000),
+        (r"([\d,.]+)\s*[Kk]\s*(?:USD|USDT|USDC)", 1_000),
         (r"([\d,.]+)\s*(?:million)\s*(?:USD|USDT|USDC)", 1_000_000),
     ]
 
@@ -97,7 +151,12 @@ def extract_protocol_name(text: str) -> str | None:
 
     for proto in protocols:
         for alias in proto.get("aliases", []):
-            if alias.lower() in text_lower:
+            alias_lower = alias.lower()
+            if alias_lower in _AMBIGUOUS_PROTOCOL_ALIASES:
+                if _has_crypto_marker(text_lower, alias_lower):
+                    return proto["name"]
+                continue
+            if _contains_token(text_lower, alias_lower):
                 return proto["name"]
     return None
 
@@ -107,7 +166,7 @@ def extract_chain(text: str) -> str | None:
     text_lower = text.lower()
     for chain, keywords in CHAIN_KEYWORDS.items():
         for kw in keywords:
-            if kw in text_lower:
+            if _contains_token(text_lower, kw):
                 return chain
     return None
 

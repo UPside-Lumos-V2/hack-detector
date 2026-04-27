@@ -6,44 +6,40 @@ from src.config import load_channels, load_twitter_accounts, get_twitter_poll_in
 from src.listeners.telegram import create_client, test_channel_read, start_listening
 from src.listeners.twitter import TwitterPoller
 from src.storage.supabase_store import SignalStore
+from src.logger import StructuredLogger
+
+logger = StructuredLogger()
 
 
 async def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "test"
 
-    print("🔍 Hack Detector")
-    print("=" * 60)
-
     # 1. 채널 목록 로딩
     channels = load_channels()
     if not channels:
-        print("❌ 모니터링 채널이 없습니다. config/channels.yaml을 확인하세요.")
+        logger.error("config", "load_channels", "No channels in channels.yaml", recoverable=False)
         return
-
-    print(f"📋 Telegram: {len(channels)}개 채널 로딩 완료")
 
     # 2. Twitter 계정 로딩
     twitter_accounts = load_twitter_accounts()
-    if twitter_accounts:
-        n = sum(len(v) for v in twitter_accounts.values())
-        print(f"🐦 Twitter: {n}개 계정 로딩 완료")
-    else:
-        print("🐦 Twitter: 비활성 (accounts.yaml 없음)")
+    n_twitter = sum(len(v) for v in twitter_accounts.values()) if twitter_accounts else 0
+
+    logger.startup(mode=mode, channels=len(channels), twitter_accounts=n_twitter)
 
     # 3. 클라이언트 연결
     client = await create_client()
 
     if mode == "test":
         # 테스트 모드: 각 채널의 최근 메시지 읽기
-        print("\n📖 테스트 모드 — 각 채널 최근 메시지 확인\n")
+        logger.info({"event": "test_mode", "channels": len(channels)})
         for channel in channels:
             await test_channel_read(client, channel)
-        print("🎉 테스트 완료!")
+        logger.info({"event": "test_complete"})
         await client.disconnect()
 
     elif mode == "listen":
         # 리스닝 모드: Telegram 실시간 + Twitter 폴링 동시 실행
-        print("\n🎧 리스닝 모드 — 실시간 감지 시작\n")
+        logger.info({"event": "listen_mode"})
 
         # Twitter 폴러를 별도 태스크로 실행
         if twitter_accounts:
@@ -55,11 +51,10 @@ async def main() -> None:
         await start_listening(client, channels)
 
     else:
-        print(f"❌ 알 수 없는 모드: {mode}")
-        print("사용법: python -m src.main [test|listen]")
+        logger.error("main", "parse_mode", f"Unknown mode: {mode}", recoverable=False)
+        print(f"Usage: python -m src.main [test|listen]")
         await client.disconnect()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-

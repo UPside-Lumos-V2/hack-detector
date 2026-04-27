@@ -1,0 +1,21 @@
+[Unit]
+Description=Hack Detector Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hack-detector
+EnvironmentFile=/etc/hack-detector/hack-detector.env
+ExecStart=/opt/hack-detector/.venv/bin/python -m src.main listen
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# e2-micro 리소스 보호
+MemoryMax=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

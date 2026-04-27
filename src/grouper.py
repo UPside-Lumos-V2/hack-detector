@@ -61,46 +61,55 @@ class IncidentGrouper:
 
     def _find_by_tx_hash(self, tx_hash: str) -> dict | None:
         """tx_hash로 기존 그룹 검색"""
-        result = (
-            self.client.table(self.table)
-            .select("*")
-            .eq("tx_hash", tx_hash)
-            .limit(1)
-            .execute()
-        )
-        return result.data[0] if result.data else None
+        try:
+            result = (
+                self.client.table(self.table)
+                .select("*")
+                .eq("tx_hash", tx_hash)
+                .limit(1)
+                .execute()
+            )
+            return result.data[0] if result.data else None
+        except Exception:
+            return None
 
     def _find_by_protocol(
         self, protocol_name: str, published_at: datetime
     ) -> dict | None:
         """protocol_name + 시간 윈도우로 검색"""
-        cutoff = (published_at - PROTOCOL_WINDOW).isoformat()
-        result = (
-            self.client.table(self.table)
-            .select("*")
-            .eq("protocol_name", protocol_name)
-            .gte("first_seen_at", cutoff)
-            .order("first_seen_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-        return result.data[0] if result.data else None
+        try:
+            cutoff = (published_at - PROTOCOL_WINDOW).isoformat()
+            result = (
+                self.client.table(self.table)
+                .select("*")
+                .eq("protocol_name", protocol_name)
+                .gte("first_seen_at", cutoff)
+                .order("first_seen_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return result.data[0] if result.data else None
+        except Exception:
+            return None
 
     def _find_by_attacker(
         self, attacker_address: str, published_at: datetime
     ) -> dict | None:
         """attacker_address + 시간 윈도우로 검색"""
-        cutoff = (published_at - ATTACKER_WINDOW).isoformat()
-        result = (
-            self.client.table(self.table)
-            .select("*")
-            .eq("attacker_address", attacker_address)
-            .gte("first_seen_at", cutoff)
-            .order("first_seen_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-        return result.data[0] if result.data else None
+        try:
+            cutoff = (published_at - ATTACKER_WINDOW).isoformat()
+            result = (
+                self.client.table(self.table)
+                .select("*")
+                .eq("attacker_address", attacker_address)
+                .gte("first_seen_at", cutoff)
+                .order("first_seen_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return result.data[0] if result.data else None
+        except Exception:
+            return None
 
     # ── 생성 / 업데이트 ──
 
@@ -116,6 +125,7 @@ class IncidentGrouper:
             "signal_count": 1,
             "source_types": [signal.source.value],
             "confidence_score": 0,
+            "best_tier": signal.source_author_tier,
         }
 
         result = (
@@ -152,6 +162,11 @@ class IncidentGrouper:
             "source_types": source_types,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+
+        # best_tier 갱신 (낮은 숫자 = 높은 신뢰도)
+        current_best = group.get("best_tier") or 3
+        if signal.source_author_tier < current_best:
+            updates["best_tier"] = signal.source_author_tier
 
         if signal.tx_hash and not group.get("tx_hash"):
             updates["tx_hash"] = signal.tx_hash

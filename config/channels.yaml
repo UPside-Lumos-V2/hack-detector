@@ -1,21 +1,30 @@
 # 모니터링 대상 텔레그램 채널 목록
 # chat_id: 텔레그램 채널/그룹의 고유 ID (음수)
 # tier: 1 = 보안업체/전문채널, 2 = 커뮤니티, 3 = 기타
+# enabled: false로 비활성화 가능
 
 channels:
   - chat_id: -1002360854548
     name: "Defimon Alerts"
     tier: 1
+    enabled: true
+    added_at: "2026-04"
 
   - chat_id: -1003089530830
     name: "DefiHackLabs Security News"
     tier: 1
+    enabled: true
+    added_at: "2026-04"
 
   - chat_id: -1001794535570
     name: "EthSecurity"
     tier: 1
+    enabled: true
+    added_at: "2026-04"
 
   # ── 테스트용 ──
   - chat_id: -1003872533937
     name: "Testing Channel"
     tier: 1
+    enabled: true
+    added_at: "2026-04"

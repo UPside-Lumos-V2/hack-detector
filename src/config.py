@@ -44,11 +44,11 @@ def get_credentials() -> tuple[int, str]:
 
 
 def load_channels() -> list[ChannelConfig]:
-    """channels.yaml에서 모니터링 채널 목록 로딩"""
+    """channels.yaml에서 모니터링 채널 목록 로딩 (enabled: false 제외)"""
     channels_file = CONFIG_DIR / "channels.yaml"
 
     if not channels_file.exists():
-        print(f"⚠️ 채널 설정 파일 없음: {channels_file}")
+        print(f"No channels config: {channels_file}")
         return []
 
     with open(channels_file, "r", encoding="utf-8") as f:
@@ -56,6 +56,8 @@ def load_channels() -> list[ChannelConfig]:
 
     channels = []
     for ch in data.get("channels", []):
+        if not ch.get("enabled", True):
+            continue
         channels.append(ChannelConfig(
             chat_id=ch["chat_id"],
             name=ch["name"],
@@ -85,21 +87,28 @@ def get_supabase_client():
 def load_twitter_accounts() -> dict[str, list[dict]] | None:
     """
     config/accounts.yaml에서 Twitter 모니터링 대상 계정 로딩.
-    없으면 None 반환 (Twitter 폴링 비활성).
+    enabled: false인 계정 자동 제외. 없으면 None.
     """
     accounts_file = CONFIG_DIR / "accounts.yaml"
     if not accounts_file.exists():
-        print("⚠️ config/accounts.yaml 없음 — Twitter 폴링 비활성")
+        print("No accounts.yaml -- Twitter polling disabled")
         return None
 
     with open(accounts_file, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
-    accounts = data.get("twitter_accounts")
-    if not accounts:
+    raw_accounts = data.get("twitter_accounts")
+    if not raw_accounts:
         return None
 
-    return accounts
+    # enabled 필터링
+    filtered: dict[str, list[dict]] = {}
+    for tier_key, accs in raw_accounts.items():
+        active = [a for a in accs if a.get("enabled", True)]
+        if active:
+            filtered[tier_key] = active
+
+    return filtered if filtered else None
 
 
 def get_twitter_poll_interval() -> int:
