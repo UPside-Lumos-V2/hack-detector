@@ -89,6 +89,17 @@ class RawTweet:
     created_at: datetime
 
 
+def _expand_urls(text: str, entities: dict) -> str:
+    """t.co 단축 URL을 실제 URL로 치환."""
+    urls = entities.get("urls", [])
+    for url_entity in urls:
+        short = url_entity.get("url", "")
+        expanded = url_entity.get("expanded_url", "")
+        if short and expanded:
+            text = text.replace(short, expanded)
+    return text
+
+
 def _parse_tweets(data: dict) -> list[RawTweet]:
     """UserTweets GraphQL 응답 → RawTweet 리스트"""
     tweets: list[RawTweet] = []
@@ -124,6 +135,10 @@ def _parse_tweets(data: dict) -> list[RawTweet]:
 
             if not tweet_id_str or not full_text:
                 continue
+
+            # t.co → 실제 URL 확장
+            entities = legacy.get("entities", {})
+            full_text = _expand_urls(full_text, entities)
 
             try:
                 dt = datetime.strptime(
