@@ -78,8 +78,10 @@ async def resolve_tweet_urls(text: str) -> list[str]:
 
 
 def append_resolved_to_text(original: str, resolved: list[str]) -> str:
-    """resolve된 트윗 내용을 원본 텍스트에 append."""
+    """resolve된 트윗 내용을 원본 텍스트에 번호 매겨서 append."""
     if not resolved:
         return original
-    separator = "\n\n--- Referenced Tweet ---\n"
-    return original + separator + "\n".join(resolved)
+    parts = []
+    for i, text in enumerate(resolved, 1):
+        parts.append(f"\n\n--- Referenced Tweet {i} ---\n{text}")
+    return original + "".join(parts)

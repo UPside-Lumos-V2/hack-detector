@@ -24,6 +24,18 @@ from src.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
+# ── Gemini 분류기 (싱글톤) ──
+_classifier = None
+
+
+def _get_classifier():
+    """GeminiClassifier 싱글톤 — Twitter 파이프라인용."""
+    global _classifier
+    if _classifier is None:
+        from src.classifiers.gemini_classifier import GeminiClassifier
+        _classifier = GeminiClassifier()
+    return _classifier
+
 # Twitter 공개 bearer 토큰 (모든 클라이언트 동일, 변경 거의 없음)
 BEARER = (
     "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs"
@@ -316,6 +328,47 @@ class TwitterPoller:
                 if enriched_text != tw.text:
                     fields = extract_all(enriched_text)
 
+                # ── LLM 게이트: Gemini 분류 → is_hack 판정 ──
+                from src.classifiers.gemini_classifier import (
+                    GeminiClassifier,
+                    merge_results,
+                )
+                classifier = _get_classifier()
+                llm_result = None
+                if classifier.available:
+                    try:
+                        llm_result = await classifier.classify(enriched_text)
+                    except Exception as e:
+                        print(f"  LLM classify error ({handle}): {e}")
+
+                merged = merge_results(fields, llm_result)
+
+                # LLM이 is_hack=false 판정 → skip
+                if llm_result and not llm_result.is_hack:
+                    self.store.log_skip(
+                        reason=f"llm_not_hack({llm_result.category})",
+                        source="twitter",
+                        channel_name=handle,
+                        channel_id=0,
+                        message_id=tw.id,
+                        raw_text=enriched_text[:500],
+                    )
+                    print(f"  ⏭️ [{handle}] LLM skip ({llm_result.category}): {tw.text[:60]}...")
+                    continue
+
+                # LLM이 is_hack=true이지만 과거 회고 → skip
+                if llm_result and llm_result.is_hack and not llm_result.is_new_incident:
+                    self.store.log_skip(
+                        reason="llm_retrospective",
+                        source="twitter",
+                        channel_name=handle,
+                        channel_id=0,
+                        message_id=tw.id,
+                        raw_text=enriched_text[:500],
+                    )
+                    print(f"  ⏭️ [{handle}] LLM retrospective: {tw.text[:60]}...")
+                    continue
+
                 signal = HackSignal(
                     raw_text=enriched_text,
                     source=SourceType.TWITTER,
@@ -324,11 +377,11 @@ class TwitterPoller:
                     source_author=tw.username,
                     source_author_tier=tier,
                     published_at=tw.created_at,
-                    protocol_name=fields["protocol_name"],
-                    chain=fields["chain"],
-                    loss_usd=fields["loss_usd"],
-                    tx_hash=fields["tx_hash"],
-                    attacker_address=fields["attacker_address"],
+                    protocol_name=merged.get("protocol_name"),
+                    chain=merged.get("chain"),
+                    loss_usd=merged.get("loss_usd"),
+                    tx_hash=merged.get("tx_hash"),
+                    attacker_address=merged.get("attacker_address"),
                 )
 
                 inserted = self.store.insert(signal)

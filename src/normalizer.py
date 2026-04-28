@@ -163,6 +163,40 @@ async def process_message(
         except Exception as e:
             logging.getLogger(__name__).warning(f"LLM classify failed: {e}")
 
+    # ── LLM 게이트: is_hack=false → skip ──
+    if llm_result and not llm_result.is_hack:
+        _skip_logger.info(
+            f"SKIP [llm_not_hack({llm_result.category})] | {channel.name} | "
+            f"msg_id={message.id} | {text[:80]!r}"
+        )
+        if store:
+            store.log_skip(
+                reason=f"llm_not_hack({llm_result.category})",
+                source="telegram",
+                channel_name=channel.name,
+                channel_id=channel.chat_id,
+                message_id=message.id,
+                raw_text=text[:500],
+            )
+        return None
+
+    # is_hack=true이지만 과거 회고 → skip
+    if llm_result and llm_result.is_hack and not llm_result.is_new_incident:
+        _skip_logger.info(
+            f"SKIP [llm_retrospective] | {channel.name} | "
+            f"msg_id={message.id} | {text[:80]!r}"
+        )
+        if store:
+            store.log_skip(
+                reason="llm_retrospective",
+                source="telegram",
+                channel_name=channel.name,
+                channel_id=channel.chat_id,
+                message_id=message.id,
+                raw_text=text[:500],
+            )
+        return None
+
     # 6. Merge: regex + LLM
     merged = merge_results(regex_fields, llm_result)
 

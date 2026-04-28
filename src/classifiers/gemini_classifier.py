@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 class ClassificationResult:
     """Gemini 분류 결과"""
     is_hack: bool = False
+    is_new_incident: bool = False     # 새로 발생한 사건인지 (과거 회고 vs 신규)
     confidence: float = 0.0
     category: str = "unknown"       # hack, exploit, rugpull, phishing, scam, other
     protocol_name: str | None = None
@@ -36,6 +37,10 @@ _SYSTEM_PROMPT = """You are a DeFi security analyst. Classify the following mess
 Rules:
 - is_hack: true ONLY for actual security incidents (hacks, exploits, rugpulls, phishing attacks, fund drains)
 - is_hack: false for general news, educational content, tool announcements, job postings, market commentary
+- is_new_incident: Determine if this is a NEWLY OCCURRING incident or a retrospective/historical analysis.
+  - true: The post is reporting or alerting about a hack that is happening NOW or very recently (breaking news, real-time alerts, "just happened", urgent warnings).
+  - false: The post is analyzing, reviewing, or educating about a PAST incident (case studies, post-mortems, "what happened in [date]", lessons learned).
+  - IMPORTANT: The same protocol CAN be hacked multiple times. Do NOT assume a known protocol's incident is always old. Check the TONE and CONTEXT — is it breaking news or retrospective analysis?
 - confidence: 0.0 to 1.0 indicating how certain you are
 - Extract metadata ONLY if explicitly mentioned in the text
 - For loss_usd, return the numeric value only (e.g., 5000000 for $5M)
@@ -48,6 +53,7 @@ _RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
         "is_hack": {"type": "boolean"},
+        "is_new_incident": {"type": "boolean"},
         "confidence": {"type": "number"},
         "category": {
             "type": "string",
@@ -60,7 +66,7 @@ _RESPONSE_SCHEMA = {
         "attacker_address": {"type": "string"},
         "summary": {"type": "string"},
     },
-    "required": ["is_hack", "confidence", "category", "summary"],
+    "required": ["is_hack", "is_new_incident", "confidence", "category", "summary"],
 }
 
 
@@ -121,6 +127,7 @@ class GeminiClassifier:
 
             return ClassificationResult(
                 is_hack=data.get("is_hack", False),
+                is_new_incident=data.get("is_new_incident", False),
                 confidence=data.get("confidence", 0.0),
                 category=data.get("category", "unknown"),
                 protocol_name=data.get("protocol_name") or None,
@@ -177,6 +184,7 @@ def merge_results(
 
     # LLM 전용 필드
     merged["llm_is_hack"] = llm_result.is_hack
+    merged["llm_is_new_incident"] = llm_result.is_new_incident
     merged["llm_confidence"] = llm_result.confidence
     merged["llm_category"] = llm_result.category
     merged["llm_summary"] = llm_result.summary
