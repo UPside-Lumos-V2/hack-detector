@@ -200,11 +200,17 @@ async def process_message(
     # 6. Merge: regex + LLM
     merged = merge_results(regex_fields, llm_result)
 
-    # 결과 적용
+    # 결과 적용 (regex)
     signal.protocol_name = merged.get("protocol_name")
     signal.chain = merged.get("chain")
     signal.loss_usd = merged.get("loss_usd")
     signal.tx_hash = merged.get("tx_hash")
     signal.attacker_address = merged.get("attacker_address")
+
+    # LLM 분류 결과 적용
+    signal.llm_is_hack = merged.get("llm_is_hack")
+    signal.llm_confidence = merged.get("llm_confidence")
+    signal.llm_category = merged.get("llm_category")
+    signal.llm_summary = merged.get("llm_summary")
 
     return signal

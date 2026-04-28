@@ -45,6 +45,12 @@ class HackSignal:
     )
     media_urls: list[str] = field(default_factory=list)
 
+    # === Gemini LLM 분류 결과 (Phase 0.5) ===
+    llm_is_hack: bool | None = None
+    llm_confidence: float | None = None
+    llm_category: str | None = None     # hack, exploit, rugpull, phishing, ...
+    llm_summary: str | None = None
+
     # === Incident Grouper가 할당 (Phase 0.2.5) ===
     incident_group_id: str | None = None
 

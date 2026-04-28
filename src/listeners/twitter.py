@@ -382,6 +382,11 @@ class TwitterPoller:
                     loss_usd=merged.get("loss_usd"),
                     tx_hash=merged.get("tx_hash"),
                     attacker_address=merged.get("attacker_address"),
+                    # LLM 분류 결과
+                    llm_is_hack=merged.get("llm_is_hack"),
+                    llm_confidence=merged.get("llm_confidence"),
+                    llm_category=merged.get("llm_category"),
+                    llm_summary=merged.get("llm_summary"),
                 )
 
                 inserted = self.store.insert(signal)

@@ -1,6 +1,8 @@
 """Supabase 기반 HackSignal 저장소"""
+import asyncio
 import json
 import time
+from datetime import datetime, timezone
 
 from supabase import Client
 
@@ -12,6 +14,7 @@ from src.scorer import calculate_confidence
 from src.alerter import AlertRuleEngine
 from src.deduplicator import AlertDeduplicator
 from src.formatter import AlertFormatter
+from src.notifier import send_alert
 from src.logger import StructuredLogger
 
 logger = StructuredLogger("store")
@@ -102,6 +105,11 @@ class SignalStore:
             "incident_group_id": group_id,
             "confidence_score": confidence,
             "alert_status": alert_status,
+            # Gemini LLM 분류 결과
+            "llm_is_hack": signal.llm_is_hack,
+            "llm_confidence": signal.llm_confidence,
+            "llm_category": signal.llm_category,
+            "llm_summary": signal.llm_summary,
         }
 
         try:
@@ -114,12 +122,16 @@ class SignalStore:
                 action_type, alert_grp, new_fields = alert_decision_data
                 if action_type == "first_alert":
                     alert_msg = self.formatter.format_first_alert(group_id, alert_grp)
-                    self._insert_alert(alert_msg, stored_signal_id)
+                    alert_id = self._insert_alert(alert_msg, stored_signal_id)
                     logger.alert_fired(group_id, "critical", "first_alert", alert_msg.title)
+                    # Telegram 발송
+                    self._schedule_telegram(alert_msg.body, alert_id)
                 elif action_type == "follow_up":
                     alert_msg = self.formatter.format_follow_up(group_id, alert_grp, new_fields)
-                    self._insert_alert(alert_msg, stored_signal_id)
+                    alert_id = self._insert_alert(alert_msg, stored_signal_id)
                     logger.alert_fired(group_id, "follow_up", "follow_up", alert_msg.title)
+                    # Telegram 발송
+                    self._schedule_telegram(alert_msg.body, alert_id)
 
             # 신호 저장 로그
             logger.signal_stored(
@@ -167,8 +179,8 @@ class SignalStore:
             .select("id", count="exact").execute()
         return result.count or 0
 
-    def _insert_alert(self, alert_msg, trigger_signal_id: str) -> None:
-        """lumos_hack_alerts에 알림 레코드 저장. 실패 시 1회 재시도."""
+    def _insert_alert(self, alert_msg, trigger_signal_id: str) -> str | None:
+        """lumos_hack_alerts에 알림 레코드 저장. 실패 시 1회 재시도. alert ID 반환."""
         data = {
             "incident_group_id": alert_msg.incident_group_id,
             "alert_level": alert_msg.alert_level,
@@ -180,12 +192,38 @@ class SignalStore:
             "trigger_signal_id": trigger_signal_id,
         }
         try:
-            self.client.table("lumos_hack_alerts").insert(data).execute()
+            result = self.client.table("lumos_hack_alerts").insert(data).execute()
+            return result.data[0]["id"] if result.data else None
         except Exception as e:
             # 1회 재시도
             logger.error("store", "insert_alert", f"retry: {e}", recoverable=True)
             try:
                 time.sleep(0.5)
-                self.client.table("lumos_hack_alerts").insert(data).execute()
+                result = self.client.table("lumos_hack_alerts").insert(data).execute()
+                return result.data[0]["id"] if result.data else None
             except Exception as e2:
                 logger.error("store", "insert_alert", f"final fail: {e2}", recoverable=False)
+                return None
+
+    def _schedule_telegram(self, body: str, alert_id: str | None) -> None:
+        """Telegram 발송을 비동기로 스케줄링."""
+        async def _do_send():
+            try:
+                sent = await send_alert(body)
+                if sent and alert_id:
+                    self.client.table("lumos_hack_alerts").update({
+                        "sent_at": datetime.now(timezone.utc).isoformat(),
+                        "sent_to": "telegram",
+                    }).eq("id", alert_id).execute()
+            except Exception as e:
+                logger.error("store", "telegram_send", str(e), recoverable=True)
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(_do_send())
+            else:
+                loop.run_until_complete(_do_send())
+        except RuntimeError:
+            # 이벤트 루프가 없는 경우 (테스트 등)
+            asyncio.run(_do_send())
