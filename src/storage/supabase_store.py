@@ -121,13 +121,13 @@ class SignalStore:
             if alert_decision_data and stored_signal_id:
                 action_type, alert_grp, new_fields = alert_decision_data
                 if action_type == "first_alert":
-                    alert_msg = self.formatter.format_first_alert(group_id, alert_grp)
+                    alert_msg = self.formatter.format_first_alert(group_id, alert_grp, source_url=signal.source_url)
                     alert_id = self._insert_alert(alert_msg, stored_signal_id)
                     logger.alert_fired(group_id, "critical", "first_alert", alert_msg.title)
                     # Telegram 발송
                     self._schedule_telegram(alert_msg.body, alert_id)
                 elif action_type == "follow_up":
-                    alert_msg = self.formatter.format_follow_up(group_id, alert_grp, new_fields)
+                    alert_msg = self.formatter.format_follow_up(group_id, alert_grp, new_fields, source_url=signal.source_url)
                     alert_id = self._insert_alert(alert_msg, stored_signal_id)
                     logger.alert_fired(group_id, "follow_up", "follow_up", alert_msg.title)
                     # Telegram 발송

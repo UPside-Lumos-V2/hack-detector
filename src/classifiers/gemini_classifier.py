@@ -36,7 +36,12 @@ _SYSTEM_PROMPT = """You are a DeFi security analyst. Classify the following mess
 
 Rules:
 - is_hack: true ONLY for actual security incidents (hacks, exploits, rugpulls, phishing attacks, fund drains)
-- is_hack: false for general news, educational content, tool announcements, job postings, market commentary
+- is_hack: false for:
+  - General news, educational content, tool announcements, job postings, market commentary
+  - Post-incident communications: bounty negotiations, threat messages, fund return requests, white-hat offers
+  - Onchain messages between parties (attacker <-> project team communications)
+  - Fund recovery/tracking updates ("funds moved to mixer", "attacker bridged to X")
+  - Security tool advertisements or monitoring service promotions
 - is_new_incident: Determine if this is a NEWLY OCCURRING incident or a retrospective/historical analysis.
   - true: The post is reporting or alerting about a hack that is happening NOW or very recently (breaking news, real-time alerts, "just happened", urgent warnings).
   - false: The post is analyzing, reviewing, or educating about a PAST incident (case studies, post-mortems, "what happened in [date]", lessons learned).
@@ -46,6 +51,7 @@ Rules:
 - For loss_usd, return the numeric value only (e.g., 5000000 for $5M)
 - For tx_hash, return only valid 0x-prefixed hex strings (66 chars)
 - For attacker_address, return only valid 0x-prefixed hex strings (42 chars)
+- For summary, keep it under 160 characters. Be concise.
 
 Respond with JSON only, no explanation."""
 
@@ -69,12 +75,14 @@ _RESPONSE_SCHEMA = {
     "required": ["is_hack", "is_new_incident", "confidence", "category", "summary"],
 }
 
+# 필수 필드 (repair된 JSON 검증용)
+_REQUIRED_FIELDS = {"is_hack", "is_new_incident", "confidence", "category", "summary"}
+
 
 class GeminiClassifier:
-    """Gemini 3 Flash 기반 DeFi 해킹 분류기"""
+    """Gemini Flash 기반 DeFi 해킹 분류기"""
 
     MODEL = "gemini-3-flash-preview"
-    FALLBACK_MODEL = "gemini-2.5-flash"
 
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
@@ -99,52 +107,102 @@ class GeminiClassifier:
     def available(self) -> bool:
         return self._available
 
+    @staticmethod
+    def _repair_json(raw: str) -> dict | None:
+        """잘린 JSON 복구 시도 → 필수 필드 검증까지 통과해야 반환."""
+        # 1차: 그대로 파싱
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            # 2차: 닫히지 않은 문자열/객체 보정
+            repaired = raw.rstrip()
+            if repaired.count('"') % 2 != 0:
+                repaired += '"'
+            open_braces = repaired.count('{') - repaired.count('}')
+            repaired += '}' * max(open_braces, 0)
+            try:
+                data = json.loads(repaired)
+            except json.JSONDecodeError:
+                return None
+
+        # 필수 필드 검증: 하나라도 빠지면 repair 실패로 처리
+        if not isinstance(data, dict):
+            return None
+        missing = _REQUIRED_FIELDS - set(data.keys())
+        if missing:
+            logger.warning(f"Gemini JSON missing required fields: {missing}")
+            return None
+
+        return data
+
+    def _call_model(self, raw_text: str) -> dict:
+        """모델 호출 + JSON 파싱 + 검증. 실패 시 예외 발생."""
+        from google.genai import types
+
+        response = self._client.models.generate_content(
+            model=self.MODEL,
+            contents=raw_text[:4000],
+            config=types.GenerateContentConfig(
+                system_instruction=_SYSTEM_PROMPT,
+                response_mime_type="application/json",
+                response_schema=_RESPONSE_SCHEMA,
+                temperature=0.1,
+                max_output_tokens=1024,
+            ),
+        )
+
+        # response.text 비어있는 경우
+        if not response.text:
+            logger.warning(f"Gemini empty response (finish_reason={getattr(response, 'finish_reason', 'unknown')})")
+            raise ValueError("empty response")
+
+        raw = response.text.strip()
+
+        # JSON repair + 필수 필드 검증
+        data = self._repair_json(raw)
+        if data is not None:
+            return data
+
+        # repair/검증 실패 → 원본 로깅
+        logger.warning(f"Gemini raw response (unparseable): {raw[:300]}")
+        raise json.JSONDecodeError("repair failed", raw, 0)
+
     async def classify(self, raw_text: str) -> ClassificationResult | None:
         """
         메시지를 분류하고 메타데이터를 추출.
-        실패 시 None 반환 (caller는 regex fallback 사용).
+        JSON 파싱 실패 시 1회 재시도. 최종 실패 시 None 반환.
         """
         if not self._available:
             return None
 
-        try:
-            from google.genai import types
+        max_attempts = 2
+        for attempt in range(max_attempts):
+            try:
+                data = self._call_model(raw_text)
 
-            response = self._client.models.generate_content(
-                model=self.MODEL,
-                contents=raw_text[:4000],  # 토큰 절약
-                config=types.GenerateContentConfig(
-                    system_instruction=_SYSTEM_PROMPT,
-                    response_mime_type="application/json",
-                    response_schema=_RESPONSE_SCHEMA,
-                    temperature=0.1,  # 일관된 분류
-                    max_output_tokens=512,
-                ),
-            )
+                return ClassificationResult(
+                    is_hack=data.get("is_hack", False),
+                    is_new_incident=data.get("is_new_incident", False),
+                    confidence=data.get("confidence", 0.0),
+                    category=data.get("category", "unknown"),
+                    protocol_name=data.get("protocol_name") or None,
+                    chain=data.get("chain") or None,
+                    loss_usd=data.get("loss_usd") or None,
+                    tx_hash=data.get("tx_hash") or None,
+                    attacker_address=data.get("attacker_address") or None,
+                    summary=data.get("summary", ""),
+                    raw_response=data,
+                )
 
-            text = response.text.strip()
-            data = json.loads(text)
-
-            return ClassificationResult(
-                is_hack=data.get("is_hack", False),
-                is_new_incident=data.get("is_new_incident", False),
-                confidence=data.get("confidence", 0.0),
-                category=data.get("category", "unknown"),
-                protocol_name=data.get("protocol_name") or None,
-                chain=data.get("chain") or None,
-                loss_usd=data.get("loss_usd") or None,
-                tx_hash=data.get("tx_hash") or None,
-                attacker_address=data.get("attacker_address") or None,
-                summary=data.get("summary", ""),
-                raw_response=data,
-            )
-
-        except json.JSONDecodeError as e:
-            logger.warning(f"Gemini JSON parse error: {e}")
-            return None
-        except Exception as e:
-            logger.warning(f"Gemini classify failed: {e}")
-            return None
+            except json.JSONDecodeError as e:
+                if attempt < max_attempts - 1:
+                    logger.warning(f"Gemini JSON parse error (retry {attempt+1}): {e}")
+                    continue
+                logger.warning(f"Gemini JSON parse error (final): {e}")
+                return None
+            except Exception as e:
+                logger.warning(f"Gemini classify failed: {e}")
+                return None
 
 
 def merge_results(
