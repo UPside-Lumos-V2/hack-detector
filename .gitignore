@@ -46,4 +46,7 @@ cookies.json
 last_ids.json
 
 # xAI 예산 추적 (로컬 상태)
-xai_budget.jsonuv.lock
+xai_budget.json
+
+uv.lock
+
