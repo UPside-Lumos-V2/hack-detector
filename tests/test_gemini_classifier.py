@@ -1,5 +1,9 @@
+import json
 import unittest
+from collections.abc import Callable
+from typing import cast
 
+import src.classifiers.gemini_classifier as gemini_classifier
 from src.classifiers.gemini_classifier import (
     ClassificationResult,
     GeminiClassifier,
@@ -10,6 +14,28 @@ from src.classifiers.gemini_classifier import (
 
 
 class GeminiClassifierLogicTest(unittest.TestCase):
+    def test_response_contract_excludes_root_cause_mechanism_fields(self) -> None:
+        forbidden = {
+            "bridge",
+            "oracle",
+            "governance",
+            "root_cause",
+            "rootcause",
+            "attack_type",
+            "attacktype",
+        }
+
+        schema = cast(dict[str, object], getattr(gemini_classifier, "_RESPONSE_SCHEMA"))
+        schema_json = json.dumps(schema, sort_keys=True)
+        self.assertNotRegex(schema_json, r'"(?:bridge|oracle|governance|root_cause|rootcause|attack_type|attacktype)"\s*:')
+
+        required = cast(list[object], schema["required"])
+        self.assertTrue(forbidden.isdisjoint({str(item).lower() for item in required}))
+
+        prompt = cast(str, getattr(gemini_classifier, "_SYSTEM_PROMPT")).lower()
+        self.assertNotRegex(prompt, r'(?mi)^\s*-\s*(bridge|oracle|governance|root_cause|rootcause|attack_type|attacktype)\b')
+        self.assertNotRegex(prompt, r'(?i)["\'](?:bridge|oracle|governance|root_cause|rootcause|attack_type|attacktype)["\']\s*:')
+
     def test_model_input_keeps_more_than_legacy_4000_chars(self):
         text = "A" * 6000
 
@@ -31,14 +57,17 @@ class GeminiClassifierLogicTest(unittest.TestCase):
     def test_repair_rejects_semantically_invalid_required_fields(self):
         raw = '{"is_hack": false, "is_new_incident": true, "confidence": 1.5, "category": "other", "summary": "x"}'
 
-        self.assertIsNone(GeminiClassifier._repair_json(raw))
+        repair_json = cast(Callable[[str], dict[str, object] | None], getattr(GeminiClassifier, "_repair_json"))
+        self.assertIsNone(repair_json(raw))
 
     def test_repair_nulls_invalid_optional_hashes(self):
         raw = '{"is_hack": true, "is_new_incident": true, "confidence": 0.9, "category": "hack", "summary": "x", "tx_hash": "0x123", "attacker_address": "0x456"}'
 
-        data = GeminiClassifier._repair_json(raw)
+        repair_json = cast(Callable[[str], dict[str, object] | None], getattr(GeminiClassifier, "_repair_json"))
+        data = repair_json(raw)
 
         self.assertIsNotNone(data)
+        assert data is not None
         self.assertIsNone(data["tx_hash"])
         self.assertIsNone(data["attacker_address"])
 
@@ -59,6 +88,25 @@ class GeminiClassifierLogicTest(unittest.TestCase):
 
         self.assertTrue(veto)
         self.assertEqual(reason, "llm_not_hack(other)")
+
+    def test_merge_preserves_new_incident_true(self):
+        result = ClassificationResult(is_hack=True, is_new_incident=True, confidence=0.9, category="exploit")
+
+        merged = merge_results({}, result)
+
+        self.assertTrue(merged["llm_is_new_incident"])
+
+    def test_merge_preserves_new_incident_false(self):
+        result = ClassificationResult(is_hack=True, is_new_incident=False, confidence=0.9, category="exploit")
+
+        merged = merge_results({}, result)
+
+        self.assertFalse(merged["llm_is_new_incident"])
+
+    def test_merge_sets_new_incident_none_without_llm(self):
+        merged = merge_results({}, None)
+
+        self.assertIsNone(merged["llm_is_new_incident"])
 
     def test_merge_normalizes_confident_llm_chain_when_regex_missing(self):
         result = ClassificationResult(is_hack=True, is_new_incident=True, confidence=0.9, category="exploit", chain="BNB Chain")
@@ -84,4 +132,4 @@ class GeminiClassifierLogicTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    _ = unittest.main()

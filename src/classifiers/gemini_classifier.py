@@ -13,6 +13,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from typing import Mapping, cast
 
 from src.extractors.field_extractor import normalize_chain_name, normalize_protocol_name
 
@@ -32,7 +33,7 @@ class ClassificationResult:
     tx_hash: str | None = None
     attacker_address: str | None = None
     summary: str = ""
-    raw_response: dict | None = None
+    raw_response: dict[str, object] | None = None
 
 
 _SYSTEM_PROMPT = """You are a DeFi security analyst. Classify the following message and extract metadata.
@@ -103,7 +104,7 @@ def build_classification_input(raw_text: str) -> str:
     return f"{head}\n\n[... omitted {omitted} chars from middle ...]\n\n{tail}"
 
 
-def has_deterministic_incident_evidence(regex_fields: dict, raw_text: str) -> bool:
+def has_deterministic_incident_evidence(regex_fields: Mapping[str, object], raw_text: str) -> bool:
     if regex_fields.get("tx_hash") or regex_fields.get("attacker_address") or regex_fields.get("loss_usd"):
         return True
 
@@ -117,7 +118,7 @@ def has_deterministic_incident_evidence(regex_fields: dict, raw_text: str) -> bo
 
 def should_veto_signal(
     llm_result: ClassificationResult | None,
-    regex_fields: dict,
+    regex_fields: Mapping[str, object],
     raw_text: str,
 ) -> tuple[bool, str]:
     if llm_result is None:
@@ -133,7 +134,7 @@ def should_veto_signal(
     return False, ""
 
 
-def _validated_optional_string(data: dict, key: str) -> str | None:
+def _validated_optional_string(data: Mapping[str, object], key: str) -> str | None:
     value = data.get(key)
     if not isinstance(value, str) or not value.strip():
         return None
@@ -153,7 +154,7 @@ def _clean_llm_protocol_name(value: str | None) -> str | None:
     return cleaned
 
 
-def _validate_model_output(data: dict) -> dict | None:
+def _validate_model_output(data: Mapping[str, object]) -> dict[str, object] | None:
     if not isinstance(data.get("is_hack"), bool):
         return None
     if not isinstance(data.get("is_new_incident"), bool):
@@ -217,7 +218,7 @@ class GeminiClassifier:
         return self._available
 
     @staticmethod
-    def _repair_json(raw: str) -> dict | None:
+    def _repair_json(raw: str) -> dict[str, object] | None:
         """잘린 JSON 복구 시도 → 필수 필드 검증까지 통과해야 반환."""
         # 1차: 그대로 파싱
         try:
@@ -244,11 +245,14 @@ class GeminiClassifier:
 
         return _validate_model_output(data)
 
-    def _call_model(self, raw_text: str) -> dict:
+    def _call_model(self, raw_text: str) -> dict[str, object]:
         """모델 호출 + JSON 파싱 + 검증. 실패 시 예외 발생."""
         from google.genai import types
 
-        response = self._client.models.generate_content(
+        client = self._client
+        assert client is not None
+
+        response = client.models.generate_content(
             model=self.MODEL,
             contents=build_classification_input(raw_text),
             config=types.GenerateContentConfig(
@@ -290,16 +294,16 @@ class GeminiClassifier:
                 data = self._call_model(raw_text)
 
                 return ClassificationResult(
-                    is_hack=data.get("is_hack", False),
-                    is_new_incident=data.get("is_new_incident", False),
-                    confidence=data.get("confidence", 0.0),
-                    category=data.get("category", "unknown"),
-                    protocol_name=data.get("protocol_name") or None,
-                    chain=data.get("chain") or None,
-                    loss_usd=data.get("loss_usd") or None,
-                    tx_hash=data.get("tx_hash") or None,
-                    attacker_address=data.get("attacker_address") or None,
-                    summary=data.get("summary", ""),
+                    is_hack=cast(bool, data["is_hack"]),
+                    is_new_incident=cast(bool, data["is_new_incident"]),
+                    confidence=cast(float, data["confidence"]),
+                    category=cast(str, data["category"]),
+                    protocol_name=cast(str | None, data.get("protocol_name")),
+                    chain=cast(str | None, data.get("chain")),
+                    loss_usd=cast(float | None, data.get("loss_usd")),
+                    tx_hash=cast(str | None, data.get("tx_hash")),
+                    attacker_address=cast(str | None, data.get("attacker_address")),
+                    summary=cast(str, data["summary"]),
                     raw_response=data,
                 )
 
@@ -315,9 +319,9 @@ class GeminiClassifier:
 
 
 def merge_results(
-    regex_fields: dict,
+    regex_fields: Mapping[str, object],
     llm_result: ClassificationResult | None,
-) -> dict:
+) -> dict[str, object]:
     """
     정규식 결과와 LLM 결과를 merge.
 
@@ -332,6 +336,7 @@ def merge_results(
     if llm_result is None:
         # LLM 실패 — regex만 사용 (기존과 동일)
         merged["llm_is_hack"] = None
+        merged["llm_is_new_incident"] = None
         merged["llm_confidence"] = None
         merged["llm_category"] = None
         merged["llm_summary"] = None

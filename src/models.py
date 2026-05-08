@@ -2,6 +2,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import cast
 from uuid import uuid4
 
 
@@ -47,6 +48,7 @@ class HackSignal:
 
     # === Gemini LLM 분류 결과 (Phase 0.5) ===
     llm_is_hack: bool | None = None
+    llm_is_new_incident: bool | None = None
     llm_confidence: float | None = None
     llm_category: str | None = None     # hack, exploit, rugpull, phishing, ...
     llm_summary: str | None = None
@@ -113,10 +115,9 @@ class HackSignal:
             source_author=tweet.user.username,
             source_author_tier=tier,
             published_at=tweet.date,
-            protocol_name=fields["protocol_name"],
-            chain=fields["chain"],
-            loss_usd=fields["loss_usd"],
-            tx_hash=fields["tx_hash"],
-            attacker_address=fields["attacker_address"],
+            protocol_name=cast(str | None, fields["protocol_name"]),
+            chain=cast(str | None, fields["chain"]),
+            loss_usd=cast(float | None, fields["loss_usd"]),
+            tx_hash=cast(str | None, fields["tx_hash"]),
+            attacker_address=cast(str | None, fields["attacker_address"]),
         )
-
