@@ -12,6 +12,7 @@ import logging
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 
@@ -86,7 +87,7 @@ def load_cookies() -> dict[str, str]:
     """cookies.json에서 로드. 없으면 RuntimeError."""
     if not COOKIES_PATH.exists():
         raise RuntimeError(
-            f"cookies.json 없음 → python scripts/setup_twitter.py 실행"
+            "cookies.json 없음 → python scripts/setup_twitter.py 실행"
         )
     with open(COOKIES_PATH) as f:
         return json.load(f)
@@ -101,7 +102,7 @@ class RawTweet:
     created_at: datetime
 
 
-def _expand_urls(text: str, entities: dict) -> str:
+def _expand_urls(text: str, entities: Any) -> str:
     """t.co 단축 URL을 실제 URL로 치환."""
     urls = entities.get("urls", [])
     for url_entity in urls:
@@ -112,7 +113,7 @@ def _expand_urls(text: str, entities: dict) -> str:
     return text
 
 
-def _parse_tweets(data: dict) -> list[RawTweet]:
+def _parse_tweets(data: Any) -> list[RawTweet]:
     """UserTweets GraphQL 응답 → RawTweet 리스트"""
     tweets: list[RawTweet] = []
     try:
@@ -174,7 +175,7 @@ class TwitterPoller:
 
     CACHE_PATH = PROJECT_ROOT / "last_ids.json"
 
-    def __init__(self, store: SignalStore, accounts: dict[str, list[dict]]):
+    def __init__(self, store: SignalStore, accounts: dict[str, list[dict[str, Any]]]):
         self.store = store
         self.accounts = accounts
         self.cookies = load_cookies()
@@ -330,7 +331,6 @@ class TwitterPoller:
 
                 # ── LLM 게이트: Gemini 분류 → is_hack 판정 ──
                 from src.classifiers.gemini_classifier import (
-                    GeminiClassifier,
                     merge_results,
                     should_veto_signal,
                 )
@@ -365,16 +365,17 @@ class TwitterPoller:
                     source_author=tw.username,
                     source_author_tier=tier,
                     published_at=tw.created_at,
-                    protocol_name=merged.get("protocol_name"),
-                    chain=merged.get("chain"),
-                    loss_usd=merged.get("loss_usd"),
-                    tx_hash=merged.get("tx_hash"),
-                    attacker_address=merged.get("attacker_address"),
+                    protocol_name=cast(str | None, merged.get("protocol_name")),
+                    chain=cast(str | None, merged.get("chain")),
+                    loss_usd=cast(float | None, merged.get("loss_usd")),
+                    tx_hash=cast(str | None, merged.get("tx_hash")),
+                    attacker_address=cast(str | None, merged.get("attacker_address")),
                     # LLM 분류 결과
-                    llm_is_hack=merged.get("llm_is_hack"),
-                    llm_confidence=merged.get("llm_confidence"),
-                    llm_category=merged.get("llm_category"),
-                    llm_summary=merged.get("llm_summary"),
+                    llm_is_hack=cast(bool | None, merged.get("llm_is_hack")),
+                    llm_is_new_incident=cast(bool | None, merged.get("llm_is_new_incident")),
+                    llm_confidence=cast(float | None, merged.get("llm_confidence")),
+                    llm_category=cast(str | None, merged.get("llm_category")),
+                    llm_summary=cast(str | None, merged.get("llm_summary")),
                 )
 
                 inserted = self.store.insert(signal)
@@ -498,15 +499,15 @@ class TwitterPoller:
         budget_path = self._get_xai_budget_path()
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-        data = {"date": today, "spent": 0, "calls": 0}
+        data: dict[str, str | float | int] = {"date": today, "spent": 0, "calls": 0}
         if budget_path.exists():
             with open(budget_path) as f:
-                existing = json.load(f)
+                existing = cast(dict[str, str | float | int], json.load(f))
             if existing.get("date") == today:
                 data = existing
 
-        data["spent"] = data.get("spent", 0) + amount
-        data["calls"] = data.get("calls", 0) + 1
+        data["spent"] = float(data.get("spent", 0)) + amount
+        data["calls"] = int(data.get("calls", 0)) + 1
 
         with open(budget_path, "w") as f:
             json.dump(data, f, indent=2)
@@ -533,8 +534,9 @@ class TwitterPoller:
         total = 0
         for query in queries:
             try:
+                create = cast(Any, client.chat.completions.create)
                 response = await asyncio.to_thread(
-                    client.chat.completions.create,
+                    create,
                     model="grok-3",
                     messages=[{
                         "role": "user",
@@ -592,11 +594,12 @@ class TwitterPoller:
                         source_author=username,
                         source_author_tier=2,
                         published_at=datetime.now(timezone.utc),
-                        protocol_name=fields["protocol_name"],
-                        chain=fields["chain"],
-                        loss_usd=fields["loss_usd"],
-                        tx_hash=fields["tx_hash"],
-                        attacker_address=fields["attacker_address"],
+                        protocol_name=cast(str | None, fields["protocol_name"]),
+                        chain=cast(str | None, fields["chain"]),
+                        loss_usd=cast(float | None, fields["loss_usd"]),
+                        tx_hash=cast(str | None, fields["tx_hash"]),
+                        attacker_address=cast(str | None, fields["attacker_address"]),
+                        llm_is_new_incident=None,
                     )
 
                     inserted = self.store.insert(signal)

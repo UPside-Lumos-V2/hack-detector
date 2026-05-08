@@ -9,6 +9,7 @@ Normalizer — 메시지 관련성 판단 + Field Extractor 적용 + LLM 보강.
 import re
 import logging
 from pathlib import Path
+from typing import cast
 
 from src.models import HackSignal
 from src.config import ChannelConfig
@@ -188,16 +189,17 @@ async def process_message(
     merged = merge_results(regex_fields, llm_result)
 
     # 결과 적용 (regex)
-    signal.protocol_name = merged.get("protocol_name")
-    signal.chain = merged.get("chain")
-    signal.loss_usd = merged.get("loss_usd")
-    signal.tx_hash = merged.get("tx_hash")
-    signal.attacker_address = merged.get("attacker_address")
+    signal.protocol_name = cast(str | None, merged.get("protocol_name"))
+    signal.chain = cast(str | None, merged.get("chain"))
+    signal.loss_usd = cast(float | None, merged.get("loss_usd"))
+    signal.tx_hash = cast(str | None, merged.get("tx_hash"))
+    signal.attacker_address = cast(str | None, merged.get("attacker_address"))
 
     # LLM 분류 결과 적용
-    signal.llm_is_hack = merged.get("llm_is_hack")
-    signal.llm_confidence = merged.get("llm_confidence")
-    signal.llm_category = merged.get("llm_category")
-    signal.llm_summary = merged.get("llm_summary")
+    signal.llm_is_hack = cast(bool | None, merged.get("llm_is_hack"))
+    signal.llm_is_new_incident = cast(bool | None, merged.get("llm_is_new_incident"))
+    signal.llm_confidence = cast(float | None, merged.get("llm_confidence"))
+    signal.llm_category = cast(str | None, merged.get("llm_category"))
+    signal.llm_summary = cast(str | None, merged.get("llm_summary"))
 
     return signal
