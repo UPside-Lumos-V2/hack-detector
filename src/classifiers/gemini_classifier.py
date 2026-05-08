@@ -11,7 +11,10 @@ API 실패 시 정규식 결과만으로 동작 (graceful degradation).
 import os
 import json
 import logging
+import re
 from dataclasses import dataclass
+
+from src.extractors.field_extractor import normalize_chain_name, normalize_protocol_name
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +80,112 @@ _RESPONSE_SCHEMA = {
 
 # 필수 필드 (repair된 JSON 검증용)
 _REQUIRED_FIELDS = {"is_hack", "is_new_incident", "confidence", "category", "summary"}
+_CATEGORIES = {"hack", "exploit", "rugpull", "phishing", "scam", "vulnerability", "other"}
+_TX_HASH_RE = re.compile(r"^0x[a-fA-F0-9]{64}$")
+_ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
+_MODEL_INPUT_LIMIT = 12000
+_LLM_ENTITY_CONFIDENCE = 0.75
+_LLM_UNKNOWN_PROTOCOL_CONFIDENCE = 0.85
+_GENERIC_PROTOCOL_VALUES = {
+    "unknown", "n/a", "na", "none", "null", "defi", "protocol", "project",
+    "victim", "target", "attacker", "exploiter", "ethereum", "bsc", "bnb chain",
+}
+
+
+def build_classification_input(raw_text: str) -> str:
+    text = raw_text.strip()
+    if len(text) <= _MODEL_INPUT_LIMIT:
+        return text
+
+    head = text[:8000]
+    tail = text[-3500:]
+    omitted = len(text) - len(head) - len(tail)
+    return f"{head}\n\n[... omitted {omitted} chars from middle ...]\n\n{tail}"
+
+
+def has_deterministic_incident_evidence(regex_fields: dict, raw_text: str) -> bool:
+    if regex_fields.get("tx_hash") or regex_fields.get("attacker_address") or regex_fields.get("loss_usd"):
+        return True
+
+    text_lower = raw_text.lower()
+    strong_terms = (
+        "exploited", "exploit", "hack", "hacked", "drained", "stolen",
+        "security incident", "compromised", "vulnerability", "attack",
+    )
+    return any(term in text_lower for term in strong_terms)
+
+
+def should_veto_signal(
+    llm_result: ClassificationResult | None,
+    regex_fields: dict,
+    raw_text: str,
+) -> tuple[bool, str]:
+    if llm_result is None:
+        return False, ""
+
+    has_evidence = has_deterministic_incident_evidence(regex_fields, raw_text)
+    high_confidence = llm_result.confidence >= 0.85
+
+    if not llm_result.is_hack and high_confidence and not has_evidence:
+        return True, f"llm_not_hack({llm_result.category})"
+    if llm_result.is_hack and not llm_result.is_new_incident and high_confidence and not has_evidence:
+        return True, "llm_retrospective"
+    return False, ""
+
+
+def _validated_optional_string(data: dict, key: str) -> str | None:
+    value = data.get(key)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()
+
+
+def _clean_llm_protocol_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = re.sub(r"\s+", " ", value.strip().strip("#@$:;,.()[]{}<>\"'"))
+    if not cleaned or cleaned.lower() in _GENERIC_PROTOCOL_VALUES:
+        return None
+    if len(cleaned) > 80:
+        return None
+    if not re.search(r"[A-Za-z0-9]", cleaned):
+        return None
+    return cleaned
+
+
+def _validate_model_output(data: dict) -> dict | None:
+    if not isinstance(data.get("is_hack"), bool):
+        return None
+    if not isinstance(data.get("is_new_incident"), bool):
+        return None
+
+    confidence = data.get("confidence")
+    if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+        return None
+
+    category = data.get("category")
+    if category not in _CATEGORIES:
+        return None
+
+    summary = data.get("summary")
+    if not isinstance(summary, str):
+        return None
+
+    cleaned = dict(data)
+    cleaned["summary"] = summary.strip()[:240]
+
+    tx_hash = _validated_optional_string(data, "tx_hash")
+    cleaned["tx_hash"] = tx_hash if tx_hash and _TX_HASH_RE.match(tx_hash) else None
+
+    attacker = _validated_optional_string(data, "attacker_address")
+    cleaned["attacker_address"] = attacker if attacker and _ADDRESS_RE.match(attacker) else None
+
+    loss = data.get("loss_usd")
+    cleaned["loss_usd"] = loss if isinstance(loss, (int, float)) and loss > 0 else None
+    cleaned["protocol_name"] = _validated_optional_string(data, "protocol_name")
+    cleaned["chain"] = _validated_optional_string(data, "chain")
+
+    return cleaned
 
 
 class GeminiClassifier:
@@ -133,7 +242,7 @@ class GeminiClassifier:
             logger.warning(f"Gemini JSON missing required fields: {missing}")
             return None
 
-        return data
+        return _validate_model_output(data)
 
     def _call_model(self, raw_text: str) -> dict:
         """모델 호출 + JSON 파싱 + 검증. 실패 시 예외 발생."""
@@ -141,7 +250,7 @@ class GeminiClassifier:
 
         response = self._client.models.generate_content(
             model=self.MODEL,
-            contents=raw_text[:4000],
+            contents=build_classification_input(raw_text),
             config=types.GenerateContentConfig(
                 system_instruction=_SYSTEM_PROMPT,
                 response_mime_type="application/json",
@@ -228,11 +337,18 @@ def merge_results(
         merged["llm_summary"] = None
         return merged
 
-    # regex 결과가 없는 필드를 LLM으로 보충
-    if not merged.get("protocol_name") and llm_result.protocol_name:
-        merged["protocol_name"] = llm_result.protocol_name
-    if not merged.get("chain") and llm_result.chain:
-        merged["chain"] = llm_result.chain
+    # regex 결과가 없는 필드를 검증된 LLM 값으로 보충
+    llm_confident = llm_result.confidence >= _LLM_ENTITY_CONFIDENCE and llm_result.is_hack
+    if not merged.get("protocol_name") and llm_result.protocol_name and llm_confident:
+        known_protocol = normalize_protocol_name(llm_result.protocol_name)
+        if known_protocol:
+            merged["protocol_name"] = known_protocol
+        elif llm_result.confidence >= _LLM_UNKNOWN_PROTOCOL_CONFIDENCE:
+            cleaned_protocol = _clean_llm_protocol_name(llm_result.protocol_name)
+            if cleaned_protocol:
+                merged["protocol_name"] = cleaned_protocol
+    if not merged.get("chain") and llm_result.chain and llm_confident:
+        merged["chain"] = normalize_chain_name(llm_result.chain)
     if not merged.get("loss_usd") and llm_result.loss_usd:
         merged["loss_usd"] = llm_result.loss_usd
     if not merged.get("tx_hash") and llm_result.tx_hash:
