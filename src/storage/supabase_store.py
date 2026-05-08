@@ -11,7 +11,7 @@ from src.models import HackSignal
 from src.config import get_supabase_client
 from src.normalizer import has_hack_keyword
 from src.grouper import IncidentGrouper
-from src.scorer import calculate_confidence
+from src.scorer import calculate_confidence, calculate_corroboration, calculate_severity
 from src.alerter import AlertRuleEngine, evaluate_alert_gate, evaluate_signal_quarantine
 from src.deduplicator import AlertDeduplicator
 from src.formatter import AlertFormatter, AlertMessage
@@ -82,13 +82,26 @@ class SignalStore:
                     )
                     group_row = _first_row(group_result.data)
                     if group_row:
-                        confidence = calculate_confidence(group_row)
-                        # 그룹 confidence 업데이트
+                        corroboration = calculate_corroboration(group_row)
+                        scored_group: Row = {
+                            **group_row,
+                            "corroboration_score": corroboration,
+                            "llm_is_new_incident": signal.llm_is_new_incident,
+                        }
+                        confidence = calculate_confidence(scored_group)
+                        severity_score, severity_label = calculate_severity(scored_group)
+                        score_updates: Row = {
+                            "confidence_score": confidence,
+                            "corroboration_score": corroboration,
+                            "severity_score": severity_score,
+                            "severity_label": severity_label,
+                            "llm_is_new_incident": signal.llm_is_new_incident,
+                        }
                         _ = self.client.table("lumos_incident_groups").update(
-                            {"confidence_score": confidence}
+                            score_updates
                         ).eq("id", group_id).execute()
-                        # Critical 2: 업데이트된 confidence를 반영한 최종 그룹 상태
-                        grp = {**group_row, "confidence_score": confidence}
+                        # Critical 2: 업데이트된 scores를 반영한 최종 그룹 상태
+                        grp = {**scored_group, **score_updates}
             except Exception as e:
                 # 그룹핑 실패해도 신호 저장은 계속
                 logger.error("grouper", "match_or_create", str(e), recoverable=True)
@@ -145,6 +158,7 @@ class SignalStore:
             "triage_status": triage_status,
             # Gemini LLM 분류 결과
             "llm_is_hack": signal.llm_is_hack,
+            "llm_is_new_incident": signal.llm_is_new_incident,
             "llm_confidence": signal.llm_confidence,
             "llm_category": signal.llm_category,
             "llm_summary": signal.llm_summary,
