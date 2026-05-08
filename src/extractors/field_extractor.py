@@ -87,19 +87,254 @@ def _load_protocols() -> list[dict]:
     return _protocols_cache
 
 
-# ── 체인 사전 ──
-CHAIN_KEYWORDS: dict[str, list[str]] = {
-    "ethereum": ["ethereum", "eth mainnet", "on eth", "#ethereum"],
-    "bsc": ["bsc", "binance smart chain", "bnb chain", "#bsc"],
-    "arbitrum": ["arbitrum", "#arbitrum", "arb"],
-    "polygon": ["polygon", "#polygon", "matic"],
-    "optimism": ["optimism", "#optimism", "op mainnet"],
-    "avalanche": ["avalanche", "avax", "#avalanche"],
-    "base": ["base chain", "on base", "#base"],
-    "solana": ["solana", "#solana", "sol"],
-    "fantom": ["fantom", "#fantom", "ftm"],
-    "zksync": ["zksync", "#zksync"],
+# ── 모호한 체인 키워드 (일반 영어와 충돌) ──
+# 이 키워드들은 단독으로 나오면 매칭하지 않고, 해시태그/문맥 마커가 있을 때만 매칭
+_AMBIGUOUS_CHAIN_KEYWORDS = {
+    "bitcoin", "btc",      # "Bitcoin Inheritance", "BTC rally"
+    "near",                # "near the bridge"
+    "ton",                 # "a ton of money"
+    "icon",                # "icon of the project"
+    "waves",               # "waves of attacks"
+    "flow",                # "cash flow"
+    "mina",                # 이름
+    "ergo",                # 라틴어
+    "core",                # "core team"
+    "oasis",               # 일반명사
+    "flare",               # "flare up"
+    "theta",               # 그리스 문자
+    "canto",               # 음악 용어
+    "bob",                 # 이름
+    "mode",                # 일반명사
+    "lisk",                # 유사: "risk"
+    "neo",                 # 접두사
+    "wax",                 # 일반명사
+    "stacks",              # "tech stacks"
+    "fuse",                # 일반명사
+    "boba",                # 음료
+    "zora",                # 이름
+    "terra",               # 라틴어
+    "luna",                # 이름/천문
+    "rune",                # 게임 용어
+    "atom",                # 과학 용어
+    "dot",                 # 일반명사
+    "ada",                 # 이름
 }
+
+# ── 체인 사전 ──
+# 카테고리: EVM L1 / EVM L2 / Non-EVM L1 / 앱체인·RWA
+# 각 키워드는 보안 봇 메시지, 트윗 본문, 해시태그 형식 모두 커버
+CHAIN_KEYWORDS: dict[str, list[str]] = {
+    # ── EVM Layer 1 ──
+    "ethereum": ["ethereum", "eth mainnet", "on eth", "#ethereum", "erc-20", "erc20"],
+    "bsc": ["bsc", "binance smart chain", "bnb chain", "#bsc", "#bnbchain"],
+    "avalanche": ["avalanche", "avax", "#avalanche", "c-chain"],
+    "polygon": ["polygon", "#polygon", "matic", "polygon pos"],
+    "fantom": ["fantom", "#fantom", "ftm", "sonic"],
+    "cronos": ["cronos", "#cronos", "cro chain"],
+    "gnosis": ["gnosis", "gnosis chain", "#gnosis", "xdai"],
+    "celo": ["celo", "#celo"],
+    "moonbeam": ["moonbeam", "#moonbeam", "glmr"],
+    "moonriver": ["moonriver", "#moonriver", "movr"],
+    "aurora": ["aurora chain", "#aurora", "aurora network"],
+    "kava": ["kava", "#kava", "kava evm"],
+    "harmony": ["harmony", "#harmony", "harmony one"],
+    "klaytn": ["klaytn", "#klaytn", "klay", "kaia"],
+    "metis": ["metis", "#metis", "metis andromeda"],
+    "fuse": ["fuse network", "#fuse"],
+    "boba": ["boba network", "#boba", "boba"],
+    "evmos": ["evmos", "#evmos"],
+    "canto": ["canto", "#canto"],
+    "core": ["core chain", "core dao", "#coredao"],
+    "pulsechain": ["pulsechain", "#pulsechain", "pls"],
+    "flare": ["flare network", "#flare", "flare"],
+    "telos": ["telos", "#telos", "telos evm"],
+    "velas": ["velas", "#velas"],
+    "oasis": ["oasis", "#oasis", "oasis sapphire", "oasis emerald"],
+    "theta": ["theta", "#theta", "theta network"],
+    "iotex": ["iotex", "#iotex"],
+    "heco": ["heco", "#heco", "huobi eco"],
+    "okc": ["okc", "okx chain", "okexchain", "#okc"],
+    "berachain": ["berachain", "#berachain", "bera"],
+    "monad": ["monad", "#monad"],
+
+    # ── EVM Layer 2 / Rollup ──
+    "arbitrum": ["arbitrum", "#arbitrum", "arbitrum one"],
+    "optimism": ["optimism", "#optimism", "op mainnet"],
+    "base": ["base chain", "on base", "#base"],
+    "zksync": ["zksync", "#zksync", "zksync era"],
+    "blast": ["blast", "#blast", "blast l2"],
+    "linea": ["linea", "#linea"],
+    "scroll": ["scroll", "#scroll"],
+    "mantle": ["mantle", "#mantle"],
+    "starknet": ["starknet", "#starknet"],
+    "polygon_zkevm": ["polygon zkevm", "#polygonzkevm", "polygon hermez"],
+    "manta": ["manta pacific", "#manta", "manta network"],
+    "mode": ["mode network", "#mode"],
+    "zora": ["zora", "#zora", "zora network"],
+    "taiko": ["taiko", "#taiko"],
+    "fraxtal": ["fraxtal", "#fraxtal"],
+    "bob": ["bob chain", "#bob", "build on bitcoin"],
+    "immutable_x": ["immutable x", "#immutablex", "imx"],
+    "loopring": ["loopring", "#loopring", "lrc"],
+    "world_chain": ["world chain", "#worldchain"],
+
+    # ── Non-EVM Layer 1 ──
+    "solana": ["solana", "#solana"],
+    "tron": ["tron", "#tron", "trx", "trc-20", "trc20"],
+    "ton": ["ton", "#ton", "the open network", "toncoin"],
+    "bitcoin": ["bitcoin", "#bitcoin", "btc"],
+    "near": ["near protocol", "#near"],
+    "cosmos": ["cosmos", "#cosmos", "atom", "cosmos hub"],
+    "cardano": ["cardano", "#cardano", "ada"],
+    "algorand": ["algorand", "#algorand", "algo"],
+    "sui": ["sui", "#sui", "sui network"],
+    "aptos": ["aptos", "#aptos"],
+    "sei": ["sei", "#sei", "sei network"],
+    "injective": ["injective", "#injective", "inj"],
+    "osmosis": ["osmosis", "#osmosis", "osmo"],
+    "polkadot": ["polkadot", "#polkadot", "dot"],
+    "kusama": ["kusama", "#kusama", "ksm"],
+    "hedera": ["hedera", "#hedera", "hbar"],
+    "stellar": ["stellar", "#stellar", "xlm"],
+    "xrpl": ["xrpl", "#xrpl", "xrp ledger", "ripple"],
+    "icp": ["internet computer", "#icp", "icp"],
+    "flow": ["flow blockchain", "#flow"],
+    "multiversx": ["multiversx", "#multiversx", "elrond", "egld"],
+    "zilliqa": ["zilliqa", "#zilliqa", "zil"],
+    "mina": ["mina protocol", "#mina", "mina"],
+    "kaspa": ["kaspa", "#kaspa", "kas"],
+    "eos": ["eos", "#eos"],
+    "wax": ["wax blockchain", "#wax"],
+    "stacks": ["stacks", "#stacks", "stx"],
+    "filecoin": ["filecoin", "#filecoin", "fil"],
+    "nervos": ["nervos", "#nervos", "ckb"],
+    "ergo": ["ergo", "#ergo"],
+    "radix": ["radix", "#radix", "xrd"],
+    "tezos": ["tezos", "#tezos", "xtz"],
+    "waves": ["waves", "#waves"],
+    "neo": ["neo", "#neo"],
+    "icon": ["icon", "#icon", "icx"],
+    "astar": ["astar", "#astar"],
+    "acala": ["acala", "#acala"],
+    "bifrost": ["bifrost", "#bifrost"],
+    "terra": ["terra", "#terra", "luna"],
+    "thorchain": ["thorchain", "#thorchain", "rune"],
+    "osmosis": ["osmosis", "#osmosis", "osmo"],
+    "dymension": ["dymension", "#dymension", "dym"],
+    "celestia": ["celestia", "#celestia", "tia"],
+
+    # ── 앱체인 / Gaming / RWA ──
+    "ronin": ["ronin", "#ronin", "ronin network"],
+    "wemix": ["wemix", "#wemix"],
+    "skale": ["skale", "#skale"],
+    "lisk": ["lisk", "#lisk"],
+    "shardeum": ["shardeum", "#shardeum"],
+    "zetachain": ["zetachain", "#zetachain", "zeta"],
+    "layerzero": ["layerzero", "#layerzero"],
+    "wormhole": ["wormhole bridge", "#wormhole"],
+    "axelar": ["axelar", "#axelar"],
+    "hyperliquid": ["hyperliquid", "#hyperliquid"],
+}
+
+# ── "Network: X" 라벨 매핑 (보안 봇 알림 형식) ──
+# 예: "🌎 Network: mainnet", "Network: BSC", "Chain: Arbitrum"
+_NETWORK_LABEL_RE = re.compile(
+    r"(?:network|chain)\s*:\s*([a-zA-Z][a-zA-Z0-9 ]*)",
+    re.IGNORECASE,
+)
+
+# CHAIN_KEYWORDS에서 자동 생성 + 수동 alias 보강
+_NETWORK_LABEL_MAP: dict[str, str] = {
+    # 특수 alias (CHAIN_KEYWORDS에 없는 변형)
+    "mainnet": "ethereum",
+    "ethereum mainnet": "ethereum",
+    "eth": "ethereum",
+    "bnb": "bsc",
+    "bnb chain": "bsc",
+    "binance": "bsc",
+    "arbitrum one": "arbitrum",
+    "arb": "arbitrum",
+    "matic": "polygon",
+    "op mainnet": "optimism",
+    "avax": "avalanche",
+    "ftm": "fantom",
+    "zksync era": "zksync",
+    "sol": "solana",
+    "trx": "tron",
+    "hbar": "hedera",
+    "xlm": "stellar",
+    "ada": "cardano",
+    "atom": "cosmos",
+    "dot": "polkadot",
+    "algo": "algorand",
+    "inj": "injective",
+    "luna": "terra",
+    "rune": "thorchain",
+    "xrp": "xrpl",
+}
+# CHAIN_KEYWORDS의 키를 자동으로 label map에 등록 (중복 무시)
+for _chain_key in CHAIN_KEYWORDS:
+    _label = _chain_key.replace("_", " ")
+    if _label not in _NETWORK_LABEL_MAP:
+        _NETWORK_LABEL_MAP[_label] = _chain_key
+
+
+def _clean_entity_label(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().strip("#@$:;,.()[]{}<>\"'"))
+
+
+def normalize_protocol_name(value: str | None) -> str | None:
+    """LLM/외부 입력 프로토콜명을 protocols.yaml 기준 canonical name으로 정규화한다."""
+    if not value:
+        return None
+
+    cleaned = _clean_entity_label(value)
+    if not cleaned:
+        return None
+
+    cleaned_lower = cleaned.lower()
+    protocols = _load_protocols()
+
+    for proto in protocols:
+        name = proto.get("name")
+        if isinstance(name, str) and cleaned_lower == name.lower():
+            return name
+
+        for alias in proto.get("aliases", []):
+            alias_lower = alias.lower()
+            if cleaned_lower == alias_lower and alias_lower not in _AMBIGUOUS_PROTOCOL_ALIASES:
+                return proto["name"]
+
+    return None
+
+
+def normalize_chain_name(value: str | None) -> str | None:
+    """체인명을 내부 canonical key(ethereum, bsc 등)로 정규화한다."""
+    if not value:
+        return None
+
+    cleaned = _clean_entity_label(value).lower()
+    if not cleaned:
+        return None
+
+    for suffix in (" network", " chain", " mainnet"):
+        if cleaned.endswith(suffix):
+            trimmed = cleaned[: -len(suffix)].strip()
+            if trimmed in _NETWORK_LABEL_MAP:
+                return _NETWORK_LABEL_MAP[trimmed]
+
+    mapped = _NETWORK_LABEL_MAP.get(cleaned)
+    if mapped:
+        return mapped
+
+    for chain, keywords in CHAIN_KEYWORDS.items():
+        if cleaned == chain.replace("_", " "):
+            return chain
+        for keyword in keywords:
+            if cleaned == keyword.lower().lstrip("#"):
+                return chain
+
+    return None
 
 
 def extract_tx_hash(text: str) -> str | None:
@@ -162,10 +397,30 @@ def extract_protocol_name(text: str) -> str | None:
 
 
 def extract_chain(text: str) -> str | None:
-    """체인 키워드 매칭"""
+    """체인 추출 — 'Network: X' 라벨 우선, 이후 키워드 매칭.
+
+    모호한 키워드(bitcoin, near, flow 등)는 해시태그(#bitcoin) 또는
+    체인 문맥("on bitcoin", "bitcoin network")이 있을 때만 매칭.
+    """
     text_lower = text.lower()
+
+    # 1차: "Network: X" / "Chain: X" 라벨 매칭 (보안 봇 형식)
+    label_match = _NETWORK_LABEL_RE.search(text)
+    if label_match:
+        label_value = label_match.group(1).strip().lower()
+        mapped = _NETWORK_LABEL_MAP.get(label_value)
+        if mapped:
+            return mapped
+
+    # 2차: 일반 키워드 매칭 (모호한 키워드는 문맥 체크)
     for chain, keywords in CHAIN_KEYWORDS.items():
         for kw in keywords:
+            kw_lower = kw.lower()
+            # 모호한 키워드 → 해시태그 또는 체인 문맥 필요
+            if kw_lower in _AMBIGUOUS_CHAIN_KEYWORDS:
+                if _has_crypto_marker(text_lower, kw_lower):
+                    return chain
+                continue
             if _contains_token(text_lower, kw):
                 return chain
     return None

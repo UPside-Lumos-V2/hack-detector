@@ -7,6 +7,8 @@ from src.extractors.field_extractor import (
     extract_chain,
     extract_loss_usd,
     extract_protocol_name,
+    normalize_chain_name,
+    normalize_protocol_name,
 )
 
 
@@ -52,6 +54,42 @@ class FieldExtractorTest(unittest.TestCase):
         self.assertEqual(extract_protocol_name(text), "Radiant Capital")
         self.assertEqual(extract_chain(text), "arbitrum")
         self.assertEqual(extract_loss_usd(text), 1_200_000)
+
+    # ── "Network: X" 라벨 체인 감지 ──
+
+    def test_network_label_mainnet_is_ethereum(self):
+        """🌎 Network: mainnet → ethereum"""
+        text = "🌎 Network: mainnet\n💰 Stolen: $1.2M"
+        self.assertEqual(extract_chain(text), "ethereum")
+
+    def test_network_label_bsc(self):
+        """Network: BSC → bsc"""
+        text = "Alert: exploit detected\nNetwork: BSC\nLoss: $500K"
+        self.assertEqual(extract_chain(text), "bsc")
+
+    def test_network_label_arbitrum(self):
+        """Chain: Arbitrum → arbitrum"""
+        text = "Chain: Arbitrum\nProtocol drained for $2M"
+        self.assertEqual(extract_chain(text), "arbitrum")
+
+    def test_network_label_case_insensitive(self):
+        """대소문자 무관하게 매칭"""
+        self.assertEqual(extract_chain("network: MAINNET"), "ethereum")
+        self.assertEqual(extract_chain("NETWORK: bsc"), "bsc")
+
+    def test_network_label_takes_priority_over_keyword(self):
+        """라벨이 키워드보다 우선"""
+        text = "🌎 Network: mainnet\nBridged from BSC"
+        self.assertEqual(extract_chain(text), "ethereum")
+
+    def test_chain_normalization_accepts_common_llm_labels(self):
+        self.assertEqual(normalize_chain_name("BNB Chain"), "bsc")
+        self.assertEqual(normalize_chain_name("Ethereum Mainnet"), "ethereum")
+        self.assertEqual(normalize_chain_name("Arbitrum One"), "arbitrum")
+
+    def test_protocol_normalization_rejects_ambiguous_alias_only(self):
+        self.assertEqual(normalize_protocol_name("Radiant"), "Radiant Capital")
+        self.assertIsNone(normalize_protocol_name("one"))
 
 
 if __name__ == "__main__":
