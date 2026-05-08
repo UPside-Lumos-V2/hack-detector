@@ -12,7 +12,8 @@ ACTIVE_INCIDENT_TERMS = (
     "was attacked", "being attacked", "suspicious attack", "critical exploit",
     "reentrancy hack", "compromised admin key", "missing access control",
     "drained", "drain all funds", "stolen funds", "attacker exploited",
-    "funds at risk", "security breach",
+    "funds at risk", "security breach", "exploit update", "was drained",
+    "new exploit", "price manipulation", "minted unbacked", "router was abused",
 )
 
 OTHER_CONTEXT_TERMS = (
@@ -21,6 +22,13 @@ OTHER_CONTEXT_TERMS = (
     "monthly", "weekly", "security news", "web2 security", "newsletter", "report", "post-mortem",
     "retrospective", "case study", "educational", "partnered", "staking",
     "staked", "etf", "whale", "deposited", "withdrew", "airdrop",
+    "testnet", "sepolia", "simulation", "security drill", "mock exploit",
+    "look back", "on this day", "years ago", "hypothetical", "if ", "could exceed",
+)
+
+UNRECOVERED_ACTIVE_TERMS = (
+    "remains missing", "still missing", "remain missing", "remaining loss",
+    "new exploit today", "happening now", "this is happening now",
 )
 
 
@@ -42,6 +50,11 @@ def has_other_context(signal: HackSignal) -> bool:
     return any(term in text for term in OTHER_CONTEXT_TERMS)
 
 
+def has_unrecovered_active_context(signal: HackSignal) -> bool:
+    text = _text(signal)
+    return any(term in text for term in UNRECOVERED_ACTIVE_TERMS)
+
+
 def has_active_incident_language(signal: HackSignal) -> bool:
     text = _text(signal)
     return any(term in text for term in ACTIVE_INCIDENT_TERMS)
@@ -60,7 +73,7 @@ def is_actionable_hack_incident(signal: HackSignal) -> bool:
     """True only for active hack incidents; false means route to other/review."""
     if signal.llm_is_hack is False:
         return False
-    if has_other_context(signal):
+    if has_other_context(signal) and not has_unrecovered_active_context(signal):
         return False
     if signal.llm_is_hack is True and has_active_incident_language(signal):
         return has_incident_evidence(signal)

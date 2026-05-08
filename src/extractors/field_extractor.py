@@ -6,12 +6,15 @@ Normalizer가 "관련 있음"으로 판단한 메시지에만 적용.
 """
 import re
 from pathlib import Path
+from typing import TypeAlias, cast
 
 import yaml
 
 # ── 프로토콜 사전 로딩 (protocols.yaml) ──
 _PROTOCOLS_FILE = Path(__file__).parent.parent.parent / "config" / "protocols.yaml"
-_protocols_cache: list[dict] | None = None
+ProtocolEntry: TypeAlias = dict[str, object]
+ExtractedFields: TypeAlias = dict[str, str | float | None]
+_protocols_cache: list[ProtocolEntry] | None = None
 
 _TOKEN_BEFORE = r"(?<![a-zA-Z0-9])"
 _TOKEN_AFTER = r"(?![a-zA-Z0-9])"
@@ -70,7 +73,7 @@ def _has_crypto_marker(text_lower: str, alias: str) -> bool:
     return marked or contextual is not None
 
 
-def _load_protocols() -> list[dict]:
+def _load_protocols() -> list[ProtocolEntry]:
     """protocols.yaml에서 프로토콜 사전 로딩 (1회 캐싱)"""
     global _protocols_cache
     if _protocols_cache is not None:
@@ -81,9 +84,17 @@ def _load_protocols() -> list[dict]:
         return _protocols_cache
 
     with open(_PROTOCOLS_FILE, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+        data = cast(object, yaml.safe_load(f))
 
-    _protocols_cache = data.get("protocols", [])
+    protocols: list[ProtocolEntry] = []
+    if isinstance(data, dict):
+        data_dict = cast(dict[object, object], data)
+        raw_protocols = data_dict.get("protocols")
+        if isinstance(raw_protocols, list):
+            raw_items = cast(list[object], raw_protocols)
+            protocols = [cast(ProtocolEntry, item) for item in raw_items if isinstance(item, dict)]
+
+    _protocols_cache = protocols
     return _protocols_cache
 
 
@@ -219,7 +230,6 @@ CHAIN_KEYWORDS: dict[str, list[str]] = {
     "bifrost": ["bifrost", "#bifrost"],
     "terra": ["terra", "#terra", "luna"],
     "thorchain": ["thorchain", "#thorchain", "rune"],
-    "osmosis": ["osmosis", "#osmosis", "osmo"],
     "dymension": ["dymension", "#dymension", "dym"],
     "celestia": ["celestia", "#celestia", "tia"],
 
@@ -297,13 +307,20 @@ def normalize_protocol_name(value: str | None) -> str | None:
 
     for proto in protocols:
         name = proto.get("name")
-        if isinstance(name, str) and cleaned_lower == name.lower():
+        if not isinstance(name, str):
+            continue
+        if cleaned_lower == name.lower():
             return name
 
-        for alias in proto.get("aliases", []):
+        aliases = proto.get("aliases")
+        if not isinstance(aliases, list):
+            continue
+        for alias in cast(list[object], aliases):
+            if not isinstance(alias, str):
+                continue
             alias_lower = alias.lower()
             if cleaned_lower == alias_lower and alias_lower not in _AMBIGUOUS_PROTOCOL_ALIASES:
-                return proto["name"]
+                return name
 
     return None
 
@@ -357,6 +374,12 @@ def extract_attacker_address(text: str) -> str | None:
 
 def extract_loss_usd(text: str) -> float | None:
     """피해액(USD) 추출"""
+    contextual_patterns = [
+        (r"(?:actual\s+loss|loss|lost|stolen|drained|damage|피해액)[^\n\r$]{0,40}\$\s*~?\s*([\d,.]+)\s*[Bb](?:illion)?", 1_000_000_000),
+        (r"(?:actual\s+loss|loss|lost|stolen|drained|damage|피해액)[^\n\r$]{0,40}\$\s*~?\s*([\d,.]+)\s*[Mm](?:illion)?", 1_000_000),
+        (r"(?:actual\s+loss|loss|lost|stolen|drained|damage|피해액)[^\n\r$]{0,40}\$\s*~?\s*([\d,.]+)\s*[Kk]", 1_000),
+        (r"(?:actual\s+loss|loss|lost|stolen|drained|damage|피해액)[^\n\r$]{0,40}\$\s*~?\s*([\d,.]+)", 1),
+    ]
     patterns = [
         (r"\$\s*~?\s*([\d,.]+)\s*[Bb](?:illion)?", 1_000_000_000),
         (r"\$\s*~?\s*([\d,.]+)\s*[Mm](?:illion)?", 1_000_000),
@@ -368,7 +391,7 @@ def extract_loss_usd(text: str) -> float | None:
         (r"([\d,.]+)\s*(?:million)\s*(?:USD|USDT|USDC)", 1_000_000),
     ]
 
-    for pattern, multiplier in patterns:
+    for pattern, multiplier in [*contextual_patterns, *patterns]:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             raw = match.group(1).replace(",", "")
@@ -385,14 +408,22 @@ def extract_protocol_name(text: str) -> str | None:
     protocols = _load_protocols()
 
     for proto in protocols:
-        for alias in proto.get("aliases", []):
+        aliases = proto.get("aliases")
+        if not isinstance(aliases, list):
+            continue
+        name = proto.get("name")
+        if not isinstance(name, str):
+            continue
+        for alias in cast(list[object], aliases):
+            if not isinstance(alias, str):
+                continue
             alias_lower = alias.lower()
             if alias_lower in _AMBIGUOUS_PROTOCOL_ALIASES:
                 if _has_crypto_marker(text_lower, alias_lower):
-                    return proto["name"]
+                    return name
                 continue
             if _contains_token(text_lower, alias_lower):
-                return proto["name"]
+                return name
     return None
 
 
@@ -412,6 +443,17 @@ def extract_chain(text: str) -> str | None:
         if mapped:
             return mapped
 
+    active_chain_match = re.search(
+        r"(?:happened|exploited|drained|attack(?:ed)?|incident)\s+on\s+([a-zA-Z][a-zA-Z0-9 ]{1,24})",
+        text,
+        re.IGNORECASE,
+    )
+    if active_chain_match:
+        candidate = re.sub(r"\s+only$", "", active_chain_match.group(1).strip(), flags=re.IGNORECASE)
+        mapped = normalize_chain_name(candidate)
+        if mapped:
+            return mapped
+
     # 2차: 일반 키워드 매칭 (모호한 키워드는 문맥 체크)
     for chain, keywords in CHAIN_KEYWORDS.items():
         for kw in keywords:
@@ -426,7 +468,7 @@ def extract_chain(text: str) -> str | None:
     return None
 
 
-def extract_all(text: str) -> dict:
+def extract_all(text: str) -> ExtractedFields:
     """모든 필드를 한번에 추출 — HackSignal에 적용할 dict 반환"""
     return {
         "tx_hash": extract_tx_hash(text),
