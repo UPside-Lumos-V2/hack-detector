@@ -2,9 +2,9 @@
 import asyncio
 import time
 from datetime import datetime, timezone
-from typing import Literal, TypeAlias
+from typing import Literal, TypeAlias, cast
 
-from postgrest.types import CountMethod
+from postgrest.types import CountMethod, JSON
 from supabase import Client
 
 from src.models import HackSignal
@@ -21,15 +21,15 @@ from src.logger import StructuredLogger
 
 logger = StructuredLogger("store")
 
-Row: TypeAlias = dict[str, object]
+Row: TypeAlias = dict[str, JSON]
 AlertDecisionData: TypeAlias = tuple[Literal["first_alert", "follow_up"], Row, list[str]]
 
 
 def _first_row(data: object) -> Row | None:
     if not isinstance(data, list) or not data:
         return None
-    row = data[0]
-    return row if isinstance(row, dict) else None
+    row = cast(object, data[0])
+    return cast(Row, row) if isinstance(row, dict) else None
 
 
 def _row_id(data: object) -> str | None:
@@ -199,7 +199,7 @@ class SignalStore:
     ):
         """skip된 메시지를 lumos_skipped_messages에 저장"""
         try:
-            self.client.table("lumos_skipped_messages").insert({
+            _ = self.client.table("lumos_skipped_messages").insert({
                 "skip_reason": reason,
                 "source": source,
                 "channel_name": channel_name,
@@ -219,7 +219,7 @@ class SignalStore:
 
     def _insert_alert(self, alert_msg: AlertMessage, trigger_signal_id: str) -> str | None:
         """lumos_hack_alerts에 알림 레코드 저장. 실패 시 1회 재시도. alert ID 반환."""
-        data: dict[str, object] = {
+        data: dict[str, JSON] = {
             "incident_group_id": alert_msg.incident_group_id,
             "alert_level": alert_msg.alert_level,
             "alert_action": alert_msg.alert_action,

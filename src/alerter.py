@@ -8,6 +8,8 @@ Rules (우선순위):
 from dataclasses import dataclass
 from typing import Literal
 
+from postgrest.types import JSON
+
 from src.models import HackSignal
 
 
@@ -32,6 +34,18 @@ _IDENTITY_ANCHORS = ("protocol_name", "tx_hash", "attacker_address")
 _HIGH_CONFIDENCE_LLM = 0.85
 
 
+def _string_list(value: JSON | None) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _int_value(value: JSON | None, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    return int(value) if isinstance(value, int | float) else default
+
+
 def evaluate_signal_quarantine(signal: HackSignal) -> AlertGateDecision:
     """신호 자체만 보고 알림 전 격리할지 판단한다."""
     if signal.llm_is_hack is False and (signal.llm_confidence or 0) >= _HIGH_CONFIDENCE_LLM:
@@ -39,7 +53,7 @@ def evaluate_signal_quarantine(signal: HackSignal) -> AlertGateDecision:
     return AlertGateDecision("allow", "")
 
 
-def evaluate_alert_gate(signal: HackSignal, group: dict) -> AlertGateDecision:
+def evaluate_alert_gate(signal: HackSignal, group: dict[str, JSON]) -> AlertGateDecision:
     """알림 직전 최소 식별 정보가 있는지 확인한다."""
     signal_gate = evaluate_signal_quarantine(signal)
     if signal_gate.should_block_alert:
@@ -54,7 +68,7 @@ def evaluate_alert_gate(signal: HackSignal, group: dict) -> AlertGateDecision:
 class AlertRuleEngine:
     """lumos_incident_groups row를 평가하여 알림 여부 결정"""
 
-    def evaluate(self, group: dict) -> AlertDecision:
+    def evaluate(self, group: dict[str, JSON]) -> AlertDecision:
         """
         Args:
             group: lumos_incident_groups row (dict)
@@ -65,10 +79,10 @@ class AlertRuleEngine:
         Returns:
             AlertDecision
         """
-        source_types = group.get("source_types") or []
+        source_types = _string_list(group.get("source_types"))
         unique_sources = set(source_types)
-        confidence = group.get("confidence_score") or 0
-        best_tier = group.get("best_tier") or 3
+        confidence = _int_value(group.get("confidence_score"), 0)
+        best_tier = _int_value(group.get("best_tier"), 3)
 
         # Rule 1: 교차 채널 2+ 종류 → 무조건 critical
         if len(unique_sources) >= 2:

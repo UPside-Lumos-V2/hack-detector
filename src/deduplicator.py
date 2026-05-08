@@ -6,8 +6,9 @@
   - silent: 이미 알림 발송 + 새 정보 없음
 """
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
+from postgrest.types import JSON
 from supabase import Client
 
 
@@ -28,10 +29,10 @@ class AlertDeduplicator:
     """lumos_hack_alerts 이력 기반 중복 체크"""
 
     def __init__(self, client: Client):
-        self.client = client
-        self.table = "lumos_hack_alerts"
+        self.client: Client = client
+        self.table: str = "lumos_hack_alerts"
 
-    def check(self, group_id: str, group: dict) -> DeduplicatorResult:
+    def check(self, group_id: str, group: dict[str, JSON]) -> DeduplicatorResult:
         """
         Args:
             group_id: incident_group UUID
@@ -46,7 +47,7 @@ class AlertDeduplicator:
             print(f"  Dedup query failed, fallback to first_alert: {e}")
             return DeduplicatorResult(action="first_alert")
 
-    def _do_check(self, group_id: str, group: dict) -> DeduplicatorResult:
+    def _do_check(self, group_id: str, group: dict[str, JSON]) -> DeduplicatorResult:
         """실제 dedup 로직 (예외는 check()에서 처리)"""
         # 기존 알림 조회
         existing = (
@@ -63,8 +64,9 @@ class AlertDeduplicator:
 
         # 기존 알림들의 metadata에서 핵심 필드 수집
         known_fields: set[str] = set()
-        for alert in existing.data:
-            meta = alert.get("metadata") or {}
+        for alert in cast(list[dict[str, JSON]], existing.data):
+            meta_value = alert.get("metadata")
+            meta = meta_value if isinstance(meta_value, dict) else {}
             for f in _KEY_FIELDS:
                 if meta.get(f):
                     known_fields.add(f)

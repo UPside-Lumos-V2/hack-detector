@@ -10,11 +10,25 @@
   - 다중 소스 (3+): +20
 """
 
+from postgrest.types import JSON
+
 TIER_SCORES = {1: 40, 2: 25, 3: 10}
 MAX_SCORE = 140
 
 
-def calculate_confidence(group: dict) -> int:
+def _string_list(value: JSON | None) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _int_value(value: JSON | None, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    return int(value) if isinstance(value, int | float) else default
+
+
+def calculate_confidence(group: dict[str, JSON]) -> int:
     """
     Incident 그룹 데이터로 confidence score 계산.
 
@@ -27,11 +41,11 @@ def calculate_confidence(group: dict) -> int:
     score = 0
 
     # 소스 타입 수 → 교차 소스 보너스
-    source_types = group.get("source_types") or []
+    source_types = _string_list(group.get("source_types"))
     unique_sources = set(source_types)
 
     # 기본 Tier 점수 (그룹의 best_tier 사용)
-    best_tier = group.get("best_tier") or 3
+    best_tier = _int_value(group.get("best_tier"), 3)
     score += TIER_SCORES.get(best_tier, 10)
 
     # 교차 소스 보너스 (+30)
@@ -49,7 +63,7 @@ def calculate_confidence(group: dict) -> int:
         score += 10
 
     # 다중 소스 보너스 (signal_count >= 3)
-    signal_count = group.get("signal_count") or 1
+    signal_count = _int_value(group.get("signal_count"), 1)
     if signal_count >= 3:
         score += 20
 
