@@ -23,11 +23,15 @@ class AlertRuleEngineTest(unittest.TestCase):
             "source_types": ["telegram", "twitter"],
             "confidence_score": 50,
             "best_tier": 3,
+            "severity_score": 92,
+            "severity_label": "critical",
         }
         decision = self.engine.evaluate(group)
         self.assertTrue(decision.should_alert)
         self.assertEqual(decision.alert_level, "critical")
         self.assertIn("cross_source", decision.reason)
+        self.assertEqual(decision.severity_label, "critical")
+        self.assertGreaterEqual(decision.severity_score or 0, 85)
 
     def test_tier1_high_confidence_critical(self):
         """Tier 1 + confidence >= 70 → critical"""
@@ -150,6 +154,120 @@ class AlertGateTest(unittest.TestCase):
 
         self.assertTrue(gate.should_block_alert)
         self.assertEqual(gate.status, "quarantined")
+
+    def test_high_confidence_non_new_suppresses_without_fresh_anchor(self):
+        signal = self._signal(protocol_name="Uniswap", llm_confidence=0.96)
+        signal.llm_is_new_incident = False
+        group: dict[str, JSON] = {
+            "protocol_name": "Uniswap",
+            "tx_hash": "0x" + "1" * 64,
+            "attacker_address": "0x" + "2" * 40,
+            "loss_usd": 2_000_000,
+            "first_seen_at": "2026-05-08T00:00:00+00:00",
+            "source_authors": ["telegram:test:1"],
+        }
+        signal.tx_hash = "0x" + "1" * 64
+        signal.attacker_address = "0x" + "2" * 40
+        signal.loss_usd = 2_000_000
+        signal.published_at = datetime(2026, 5, 8, 0, 15, tzinfo=timezone.utc)
+
+        gate = evaluate_alert_gate(signal, group)
+
+        self.assertTrue(gate.should_block_alert)
+        self.assertEqual(gate.status, "suppressed")
+        self.assertEqual(gate.reason, "llm_non_new_no_fresh_anchor")
+
+    def test_known_group_source_url_can_identify_fresh_url(self):
+        signal = self._signal(protocol_name="Uniswap", llm_confidence=0.96)
+        signal.llm_is_new_incident = False
+        signal.tx_hash = "0x" + "1" * 64
+        signal.source_url = "https://x.com/security/status/222"
+        group: dict[str, JSON] = {
+            "protocol_name": "Uniswap",
+            "tx_hash": "0x" + "1" * 64,
+            "source_url": "https://x.com/security/status/111",
+            "source_authors": ["telegram:test:1"],
+        }
+
+        gate = evaluate_alert_gate(signal, group)
+
+        self.assertFalse(gate.should_block_alert)
+        self.assertEqual(gate.status, "allow")
+
+    def test_none_new_incident_fails_open(self):
+        signal = self._signal(protocol_name="Aave", llm_confidence=0.99)
+        signal.llm_is_new_incident = None
+        group: dict[str, JSON] = {"protocol_name": "Aave"}
+
+        gate = evaluate_alert_gate(signal, group)
+
+        self.assertFalse(gate.should_block_alert)
+        self.assertEqual(gate.status, "allow")
+
+    def test_low_confidence_non_new_fails_open(self):
+        signal = self._signal(protocol_name="Aave", llm_confidence=0.60)
+        signal.llm_is_new_incident = False
+        group: dict[str, JSON] = {"protocol_name": "Aave"}
+
+        gate = evaluate_alert_gate(signal, group)
+
+        self.assertFalse(gate.should_block_alert)
+        self.assertEqual(gate.status, "allow")
+
+    def test_fresh_anchor_overrides_non_new_suppression(self):
+        signal = self._signal(protocol_name="Uniswap", llm_confidence=0.95)
+        signal.llm_is_new_incident = False
+        signal.tx_hash = "0x" + "f" * 64
+        group: dict[str, JSON] = {
+            "protocol_name": "Uniswap",
+            "tx_hash": "0x" + "e" * 64,
+            "source_authors": ["telegram:test:1"],
+        }
+
+        gate = evaluate_alert_gate(signal, group)
+
+        self.assertFalse(gate.should_block_alert)
+        self.assertEqual(gate.status, "allow")
+
+    def test_already_alerted_group_is_not_retroactively_suppressed(self):
+        signal = self._signal(protocol_name="Aave", llm_confidence=0.97)
+        signal.llm_is_new_incident = False
+        group: dict[str, JSON] = {
+            "protocol_name": "Aave",
+            "alert_status": "alerted",
+            "tx_hash": "0x" + "1" * 64,
+        }
+        signal.tx_hash = "0x" + "1" * 64
+
+        gate = evaluate_alert_gate(signal, group)
+
+        self.assertFalse(gate.should_block_alert)
+        self.assertEqual(gate.status, "allow")
+
+    def test_repeat_protocol_with_fresh_anchor_and_authors_is_allowed(self):
+        signal = self._signal(
+            protocol_name="Uniswap",
+            llm_confidence=0.99,
+            raw_text="New Uniswap exploit with fresh tx details",
+        )
+        signal.llm_is_new_incident = False
+        signal.tx_hash = "0x" + "a" * 64
+        signal.source = SourceType.TWITTER
+        signal.source_author = "new_reporter"
+        signal.source_url = "https://x.com/new_reporter/status/222"
+        signal.published_at = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        group: dict[str, JSON] = {
+            "protocol_name": "Uniswap",
+            "tx_hash": "0x" + "b" * 64,
+            "first_seen_at": "2026-05-08T00:00:00+00:00",
+            "source_authors": ["telegram:oldreporter:1"],
+            "source_url": "https://t.me/c/1/100",
+        }
+
+        gate = evaluate_alert_gate(signal, group)
+
+        self.assertFalse(gate.should_block_alert)
+        self.assertEqual(gate.status, "allow")
 
 
 class AlertFormatterTest(unittest.TestCase):
