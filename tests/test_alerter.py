@@ -1,8 +1,10 @@
 """Alert Rule Engine + Deduplicator + Formatter 단위 테스트"""
 import unittest
+from datetime import datetime, timezone
 
-from src.alerter import AlertRuleEngine
+from src.alerter import AlertRuleEngine, evaluate_alert_gate, evaluate_signal_quarantine
 from src.formatter import AlertFormatter
+from src.models import HackSignal, SourceType
 
 
 class AlertRuleEngineTest(unittest.TestCase):
@@ -58,6 +60,46 @@ class AlertRuleEngineTest(unittest.TestCase):
         """필드 누락 시 기본 silent"""
         decision = self.engine.evaluate({})
         self.assertFalse(decision.should_alert)
+
+
+class AlertGateTest(unittest.TestCase):
+    def _signal(self, **overrides):
+        data = {
+            "raw_text": "Possible exploit reported",
+            "source": SourceType.TELEGRAM,
+            "source_id": "tg_1_1",
+            "source_url": "https://t.me/c/1/1",
+            "source_author": "test",
+            "source_author_tier": 1,
+            "published_at": datetime.now(timezone.utc),
+        }
+        data.update(overrides)
+        return HackSignal(**data)
+
+    def test_high_confidence_llm_not_hack_is_quarantined(self):
+        signal = self._signal(llm_is_hack=False, llm_confidence=0.91)
+
+        gate = evaluate_signal_quarantine(signal)
+
+        self.assertTrue(gate.should_block_alert)
+        self.assertEqual(gate.status, "quarantined")
+
+    def test_group_without_identity_anchor_is_ambiguous(self):
+        signal = self._signal()
+        group = {"source_types": ["telegram", "twitter"], "confidence_score": 80, "best_tier": 1}
+
+        gate = evaluate_alert_gate(signal, group)
+
+        self.assertTrue(gate.should_block_alert)
+        self.assertEqual(gate.status, "ambiguous")
+
+    def test_group_with_protocol_anchor_can_alert(self):
+        signal = self._signal(protocol_name="Radiant Capital")
+        group = {"protocol_name": "Radiant Capital", "source_types": ["telegram"], "confidence_score": 80, "best_tier": 1}
+
+        gate = evaluate_alert_gate(signal, group)
+
+        self.assertFalse(gate.should_block_alert)
 
 
 class AlertFormatterTest(unittest.TestCase):

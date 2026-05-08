@@ -8,12 +8,47 @@ Rules (우선순위):
 from dataclasses import dataclass
 from typing import Literal
 
+from src.models import HackSignal
+
 
 @dataclass
 class AlertDecision:
     should_alert: bool
     alert_level: Literal["critical", "follow_up", "silent"]
     reason: str
+
+
+@dataclass
+class AlertGateDecision:
+    status: Literal["allow", "ambiguous", "quarantined"]
+    reason: str
+
+    @property
+    def should_block_alert(self) -> bool:
+        return self.status != "allow"
+
+
+_IDENTITY_ANCHORS = ("protocol_name", "tx_hash", "attacker_address")
+_HIGH_CONFIDENCE_LLM = 0.85
+
+
+def evaluate_signal_quarantine(signal: HackSignal) -> AlertGateDecision:
+    """신호 자체만 보고 알림 전 격리할지 판단한다."""
+    if signal.llm_is_hack is False and (signal.llm_confidence or 0) >= _HIGH_CONFIDENCE_LLM:
+        return AlertGateDecision("quarantined", "llm_not_hack_high_confidence")
+    return AlertGateDecision("allow", "")
+
+
+def evaluate_alert_gate(signal: HackSignal, group: dict) -> AlertGateDecision:
+    """알림 직전 최소 식별 정보가 있는지 확인한다."""
+    signal_gate = evaluate_signal_quarantine(signal)
+    if signal_gate.should_block_alert:
+        return signal_gate
+
+    if not any(group.get(field) for field in _IDENTITY_ANCHORS):
+        return AlertGateDecision("ambiguous", "missing_identity_anchor")
+
+    return AlertGateDecision("allow", "")
 
 
 class AlertRuleEngine:

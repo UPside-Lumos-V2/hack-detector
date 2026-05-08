@@ -11,7 +11,7 @@ from src.config import get_supabase_client
 from src.normalizer import has_hack_keyword
 from src.grouper import IncidentGrouper
 from src.scorer import calculate_confidence
-from src.alerter import AlertRuleEngine
+from src.alerter import AlertRuleEngine, evaluate_alert_gate, evaluate_signal_quarantine
 from src.deduplicator import AlertDeduplicator
 from src.formatter import AlertFormatter
 from src.notifier import send_alert
@@ -35,41 +35,55 @@ class SignalStore:
         HackSignal 저장 + Incident 그룹핑 + Confidence 점수 산출.
         UNIQUE(source, source_id) 위반 시 False 반환.
         """
-        # 1. Incident 그룹 매칭/생성
+        # 1. LLM이 고확신으로 비사건이라고 본 신호는 그룹을 오염시키지 않고 저장만 한다.
         group_id = None
         confidence = 0
         group_data = None
         grp = None  # 최종 그룹 상태 (confidence 반영 후)
-        try:
-            group_id = self.grouper.match_or_create(signal)
-            if group_id:
-                # 그룹 데이터 가져와서 점수 계산
-                group_data = (
-                    self.client.table("lumos_incident_groups")
-                    .select("*")
-                    .eq("id", group_id)
-                    .limit(1)
-                    .execute()
-                )
-                if group_data.data:
-                    confidence = calculate_confidence(group_data.data[0])
-                    # 그룹 confidence 업데이트
-                    self.client.table("lumos_incident_groups").update(
-                        {"confidence_score": confidence}
-                    ).eq("id", group_id).execute()
-                    # Critical 2: 업데이트된 confidence를 반영한 최종 그룹 상태
-                    grp = {**group_data.data[0], "confidence_score": confidence}
-        except Exception as e:
-            # 그룹핑 실패해도 신호 저장은 계속
-            logger.error("grouper", "match_or_create", str(e), recoverable=True)
+        alert_status = "pending"
+        triage_status = None
+        pre_group_gate = evaluate_signal_quarantine(signal)
+        if pre_group_gate.should_block_alert:
+            alert_status = pre_group_gate.status
+            triage_status = pre_group_gate.status
+        else:
+            try:
+                group_id = self.grouper.match_or_create(signal)
+                if group_id:
+                    # 그룹 데이터 가져와서 점수 계산
+                    group_data = (
+                        self.client.table("lumos_incident_groups")
+                        .select("*")
+                        .eq("id", group_id)
+                        .limit(1)
+                        .execute()
+                    )
+                    if group_data.data:
+                        confidence = calculate_confidence(group_data.data[0])
+                        # 그룹 confidence 업데이트
+                        self.client.table("lumos_incident_groups").update(
+                            {"confidence_score": confidence}
+                        ).eq("id", group_id).execute()
+                        # Critical 2: 업데이트된 confidence를 반영한 최종 그룹 상태
+                        grp = {**group_data.data[0], "confidence_score": confidence}
+            except Exception as e:
+                # 그룹핑 실패해도 신호 저장은 계속
+                logger.error("grouper", "match_or_create", str(e), recoverable=True)
 
         # 2. Alert 판정 (signal 저장 후 실행하기 위해 결과만 미리 계산)
-        alert_status = "pending"
         alert_decision_data = None  # (action, grp, new_fields) 저장용
         if group_id and grp:
             try:
-                decision = self.alert_engine.evaluate(grp)
-                if decision.should_alert:
+                gate = evaluate_alert_gate(signal, grp)
+                if gate.should_block_alert:
+                    alert_status = gate.status
+                    triage_status = gate.status
+                    decision = None
+                else:
+                    decision = self.alert_engine.evaluate(grp)
+                if decision is None:
+                    pass
+                elif decision.should_alert:
                     dedup_result = self.deduplicator.check(group_id, grp)
                     if dedup_result.action == "first_alert":
                         alert_status = "alerted"
@@ -105,6 +119,7 @@ class SignalStore:
             "incident_group_id": group_id,
             "confidence_score": confidence,
             "alert_status": alert_status,
+            "triage_status": triage_status,
             # Gemini LLM 분류 결과
             "llm_is_hack": signal.llm_is_hack,
             "llm_confidence": signal.llm_confidence,
