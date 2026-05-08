@@ -14,6 +14,7 @@ _BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 _CHAT_ID = os.getenv("TELEGRAM_ALERT_CHAT_ID")
 _API_BASE = "https://api.telegram.org"
 _TIMEOUT = 10
+_MAX_MESSAGE_LENGTH = 4096
 
 
 async def send_alert(text: str, chat_id: str | None = None) -> bool:
@@ -34,10 +35,17 @@ async def send_alert(text: str, chat_id: str | None = None) -> bool:
         logger.warning("Telegram notifier disabled: missing BOT_TOKEN or CHAT_ID")
         return False
 
+    if len(text) > _MAX_MESSAGE_LENGTH:
+        logger.warning(
+            "Telegram alert truncated: "
+            f"original_length={len(text)} max_length={_MAX_MESSAGE_LENGTH} "
+            f"truncated_chars={len(text) - _MAX_MESSAGE_LENGTH}"
+        )
+
     url = f"{_API_BASE}/bot{token}/sendMessage"
     payload = {
         "chat_id": target,
-        "text": text[:4096],
+        "text": text[:_MAX_MESSAGE_LENGTH],
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }

@@ -308,7 +308,7 @@ class TwitterPoller:
                         channel_name=handle,
                         channel_id=0,
                         message_id=tw.id,
-                        raw_text=tw.text[:500],
+                        raw_text=tw.text,
                     )
                     continue
 
@@ -332,6 +332,7 @@ class TwitterPoller:
                 from src.classifiers.gemini_classifier import (
                     GeminiClassifier,
                     merge_results,
+                    should_veto_signal,
                 )
                 classifier = _get_classifier()
                 llm_result = None
@@ -343,30 +344,17 @@ class TwitterPoller:
 
                 merged = merge_results(fields, llm_result)
 
-                # LLM이 is_hack=false 판정 → skip
-                if llm_result and not llm_result.is_hack:
+                veto, veto_reason = should_veto_signal(llm_result, fields, enriched_text)
+                if veto:
                     self.store.log_skip(
-                        reason=f"llm_not_hack({llm_result.category})",
+                        reason=veto_reason,
                         source="twitter",
                         channel_name=handle,
                         channel_id=0,
                         message_id=tw.id,
-                        raw_text=enriched_text[:500],
+                        raw_text=enriched_text,
                     )
-                    print(f"  ⏭️ [{handle}] LLM skip ({llm_result.category}): {tw.text[:60]}...")
-                    continue
-
-                # LLM이 is_hack=true이지만 과거 회고 → skip
-                if llm_result and llm_result.is_hack and not llm_result.is_new_incident:
-                    self.store.log_skip(
-                        reason="llm_retrospective",
-                        source="twitter",
-                        channel_name=handle,
-                        channel_id=0,
-                        message_id=tw.id,
-                        raw_text=enriched_text[:500],
-                    )
-                    print(f"  ⏭️ [{handle}] LLM retrospective: {tw.text[:60]}...")
+                    print(f"  ⏭️ [{handle}] {veto_reason}: {tw.text[:60]}...")
                     continue
 
                 signal = HackSignal(
@@ -624,4 +612,3 @@ class TwitterPoller:
         self.consecutive_failures = 0
 
         return total
-
