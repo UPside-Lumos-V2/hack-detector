@@ -19,3 +19,6 @@ dev = [
     "ruff>=0.7",
 ]
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
