@@ -260,7 +260,7 @@ class GeminiClassifier:
                 response_mime_type="application/json",
                 response_schema=_RESPONSE_SCHEMA,
                 temperature=0.1,
-                max_output_tokens=1024,
+                max_output_tokens=2048,
             ),
         )
 
